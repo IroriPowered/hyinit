@@ -1,0 +1,21 @@
+[versions]
+spotless = "8.2.1"
+shadow = "9.3.1"
+hytale = "2026.02.06-aa1b071c2"
+mixin = "0.17.0+mixin.0.8.7"
+mixinextras = "0.5.3"
+asm = "9.9"
+guava = "33.5.0-jre"
+gson = "2.13.2"
+
+[libraries]
+hytale = { group = "com.hypixel.hytale", name = "Server", version.ref = "hytale" }
+mixin = { group = "net.fabricmc", name = "sponge-mixin", version.ref = "mixin" }
+mixinextras = { group = "io.github.llamalad7", name = "mixinextras-fabric", version.ref = "mixinextras" }
+asm-tree = { group = "org.ow2.asm", name = "asm-tree", version.ref = "asm" }
+guava = { group = "com.google.guava", name = "guava", version.ref = "guava" }
+gson = { group = "com.google.code.gson", name = "gson", version.ref = "gson" }
+
+[plugins]
+spotless = { id = "com.diffplug.spotless", version.ref = "spotless" }
+shadow = { id = "com.gradleup.shadow", version.ref = "shadow" }

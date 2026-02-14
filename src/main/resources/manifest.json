@@ -1,0 +1,18 @@
+{
+    "Group": "IroriPowered",
+    "Name": "Hyinit",
+    "Version": "${version}",
+    "Website": "https://www.irori.cc/",
+    "Description": "Restriction-free Mixin bootstrapper for Hytale.",
+    "Main": "cc.irori.hyinit.dummy.DummyPlugin",
+    "Authors": [
+        {
+            "Name": "KabanFriends",
+            "Url": "https://github.com/KabanFriends"
+        }
+    ],
+    "ServerVersion": "*",
+    "Dependencies": {},
+    "OptionalDependencies": {},
+    "IncludesAssetPack": false
+}
