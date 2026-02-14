@@ -123,8 +123,6 @@ public class HyinitClassLoader extends SecureClassLoader {
 
     @Override
     protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
-        boolean test = name.contains("com.hypixel.hytale.plugin.early.ClassTransformer");
-
         synchronized (getClassLoadingLock(name)) {
             Class<?> c = findLoadedClass(name);
 
@@ -132,17 +130,7 @@ public class HyinitClassLoader extends SecureClassLoader {
                 if (name.startsWith("java.")) {
                     c = PLATFORM_CLASS_LOADER.loadClass(name);
                 } else {
-                    if (test) {
-                        HyinitLogger.get().info("Loading class: " + name);
-                    }
                     c = tryLoadClass(name, false);
-                    if (test) {
-                        if (c != null) {
-                            HyinitLogger.get().info("Successfully loaded class " + name + " from this classloader");
-                        } else {
-                            HyinitLogger.get().info("Class " + name + " not found in this classloader, trying parent");
-                        }
-                    }
 
                     if (c == null) {
                         String fileName = LoaderUtil.getClassFileName(name);
@@ -174,19 +162,11 @@ public class HyinitClassLoader extends SecureClassLoader {
                 resolveClass(c);
             }
 
-            if (test) {
-                if (c != null) {
-                    HyinitLogger.get().info("Successfully loaded class " + name + ": " + c);
-                } else {
-                    HyinitLogger.get().info("Failed to load class " + name);
-                }
-            }
             return c;
         }
     }
 
     private Class<?> tryLoadClass(String name, boolean allowFromParent) throws ClassNotFoundException {
-        boolean test = name.contains("com.hypixel.hytale.plugin.early.ClassTransformer");
         if (name.startsWith(".java")) {
             return null;
         }
@@ -204,9 +184,6 @@ public class HyinitClassLoader extends SecureClassLoader {
 
         byte[] input = getPostMixinClassByteArray(name, allowFromParent);
         if (input == null) {
-            if (test) {
-                HyinitLogger.get().info("Class " + name + " not found in this classloader");
-            }
             return null;
         }
 
@@ -235,9 +212,6 @@ public class HyinitClassLoader extends SecureClassLoader {
             }
         }
 
-        if (test) {
-            HyinitLogger.get().info("Defining class " + name + " with byte array of size " + input.length);
-        }
         return defineClass(name, input, 0, input.length, metadata.codeSource);
     }
 
@@ -254,15 +228,8 @@ public class HyinitClassLoader extends SecureClassLoader {
     }
 
     private byte[] getRawClassByteArray(String name, boolean allowFromParent) throws IOException {
-        boolean test = name.contains("com.hypixel.hytale.plugin.early.ClassTransformer");
-        if (test) {
-            HyinitLogger.get().info("getRawClassByteArray: " + name);
-        }
         name = LoaderUtil.getClassFileName(name);
         URL url = findResource(name);
-        if (test) {
-            HyinitLogger.get().info("Found resource URL: " + url);
-        }
 
         if (url == null) {
             if (!allowFromParent) {
@@ -286,9 +253,6 @@ public class HyinitClassLoader extends SecureClassLoader {
                 outputStream.write(buffer, 0, len);
             }
 
-            if (test) {
-                HyinitLogger.get().info("Read " + outputStream.size() + " bytes for class " + name);
-            }
             return outputStream.toByteArray();
         }
     }
@@ -308,10 +272,6 @@ public class HyinitClassLoader extends SecureClassLoader {
     }
 
     private byte[] getPostMixinClassByteArray(String name, boolean allowFromParent) {
-        boolean test = name.contains("com.hypixel.hytale.plugin.early.ClassTransformer");
-        if (test) {
-            HyinitLogger.get().info("getPostMixinClassByteArray: " + name);
-        }
         byte[] original = getPreMixinClassByteArray(name, allowFromParent);
 
         if (!isTransformerInitialized() || !canTransformClass(name)) {
@@ -319,12 +279,6 @@ public class HyinitClassLoader extends SecureClassLoader {
         }
 
         try {
-            if (test) {
-                HyinitLogger.get().info("Applying mixin transformers to class: " + name);
-                byte[] arr = transformer.transformClassBytes(name, name, original);
-                HyinitLogger.get().info("Transformed class " + name + ", resulting byte array size: " + arr.length);
-                return arr;
-            }
             return transformer.transformClassBytes(name, name, original);
         } catch (Throwable t) {
             String message = String.format("Mixin transformation of %s failed", name);
