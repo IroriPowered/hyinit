@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.Arrays;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.Optional;
@@ -64,9 +65,29 @@ public final class ServerJarLocator {
 
     private static boolean isKey(String arg) {
         for (String key : ARG_KEYS) {
-            if (key.equals(arg)) return true;
+            String prefix = key + "=";
+            if (key.equals(arg) || arg.startsWith(prefix)) return true;
         }
         return false;
+    }
+
+    private static boolean isValue(String arg, String[] args) {
+        for (int i = 0; i < args.length; i++) {
+            for (String key : ARG_KEYS) {
+                String prefix = key + "=";
+                if ((isKey(args[i])) && i + 1 < args.length) {
+                    return !args[i].startsWith(prefix) && arg.equals(args[i + 1]);
+                }
+            }
+        }
+        return false;
+    }
+
+    public static String[] stripArgs(String[] args) {
+        return Arrays.stream(args)
+                .filter(i -> !isKey(i))
+                .filter(i -> !isValue(i, args))
+                .toArray(String[]::new);
     }
 
     private static Optional<Path> scanJarCandidates(Path dir) {
