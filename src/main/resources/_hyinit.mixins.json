@@ -6,6 +6,6 @@
         "MixinEarlyPluginLoader",
         "MixinHytaleLogger",
         "MixinLateMain",
-        "MixinPendingLoadJavaPlugin"
+        "MixinPluginManager"
     ]
 }
