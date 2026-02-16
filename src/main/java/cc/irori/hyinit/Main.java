@@ -28,6 +28,9 @@ public final class Main {
         Path cwd = Paths.get("").toAbsolutePath().normalize();
 
         Path serverJar = ServerJarLocator.locate(args);
+        // Remove args used by hyinit so we don't pass them to the server
+        // causing a "UnrecognizedOptionException"
+        final String[] serverArgs = ServerJarLocator.stripArgs(args);
         System.out.println("Using server jar: " + serverJar);
 
         HyinitClassLoader classLoader = new HyinitClassLoader();
@@ -82,7 +85,7 @@ public final class Main {
                 MethodHandle mainHandle = MethodHandles.lookup()
                         .findStatic(mainClass, "main", MethodType.methodType(void.class, String[].class))
                         .asFixedArity();
-                mainHandle.invoke((Object) args);
+                mainHandle.invoke((Object) serverArgs);
             } catch (Throwable t) {
                 throw SneakyThrow.sneakyThrow(t);
             }
