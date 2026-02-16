@@ -9,7 +9,7 @@ This bootstrapper is currently in early development!
 Run Hyinit JAR with the standard HytaleServer launch arguments.
 Hyinit will automatically locate `HytaleServer.jar` and boot with Mixins enabled.
 ```shell
-java -jar Hyinit-1.0.jar [the rest of HytaleServer launch args]
+java -jar Hyinit-X.X.X.jar [the rest of HytaleServer launch args]
 ```
 
 ### Adding Mixins
