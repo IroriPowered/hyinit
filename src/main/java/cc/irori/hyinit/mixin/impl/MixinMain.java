@@ -12,7 +12,8 @@ public class MixinMain {
             method = "launchWithTransformingClassLoader",
             at = @At(value = "INVOKE", target = "Ljava/lang/ClassLoader;getParent()Ljava/lang/ClassLoader;"))
     private static ClassLoader hyinit$redirectTransformingClassLoaderParent(ClassLoader instance) {
-        // Parent refers to the dummy class loader that HyinitClassLoader creates which cannot load java platform classes.
+        // Parent refers to the dummy class loader that HyinitClassLoader creates which cannot load java platform
+        // classes.
         // Use the main HyinitClassLoader to load everything.
         return instance;
     }
