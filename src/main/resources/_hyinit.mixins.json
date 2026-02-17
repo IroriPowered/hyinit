@@ -7,6 +7,7 @@
         "MixinHytaleLogger",
         "MixinLateMain",
         "MixinMain",
+        "MixinPluginClassLoader",
         "MixinPluginManager"
     ]
 }
