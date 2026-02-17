@@ -1,12 +1,10 @@
 package cc.irori.hyinit.mixin.impl;
 
 import com.hypixel.hytale.server.core.plugin.PluginClassLoader;
-
 import java.io.IOException;
 import java.net.URL;
 import java.util.Enumeration;
 import java.util.NoSuchElementException;
-
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Redirect;
@@ -30,12 +28,12 @@ public class MixinPluginClassLoader {
 
     @Redirect(
             method = "getResources",
-            at = @At(
-                    value = "INVOKE",
-                    target = "Ljava/lang/ClassLoader;getResources(Ljava/lang/String;)Ljava/util/Enumeration;"
-            )
-    )
-    private Enumeration<URL> hyinit$blockLoadingManifestResources(ClassLoader instance, String name) throws IOException {
+            at =
+                    @At(
+                            value = "INVOKE",
+                            target = "Ljava/lang/ClassLoader;getResources(Ljava/lang/String;)Ljava/util/Enumeration;"))
+    private Enumeration<URL> hyinit$blockLoadingManifestResources(ClassLoader instance, String name)
+            throws IOException {
         if (name.equalsIgnoreCase("manifest.json")) {
             return new Enumeration<>() {
                 @Override
