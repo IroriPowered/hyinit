@@ -134,11 +134,15 @@ public class HyinitClassLoader extends SecureClassLoader {
     public Enumeration<URL> getResources(String name) throws IOException {
         Objects.requireNonNull(name, "name");
 
-        Enumeration<URL> resources = urlLoader.getResources(name);
-        if (!resources.hasMoreElements()) {
-            return originalLoader.getResources(name);
-        }
-        return resources;
+        Enumeration<URL> primary = urlLoader.getResources(name);
+        Enumeration<URL> fallback = originalLoader.getResources(name);
+
+        if (!primary.hasMoreElements()) return fallback;
+        if (!fallback.hasMoreElements()) return primary;
+
+        var merged = Collections.list(primary);
+        while (fallback.hasMoreElements()) merged.add(fallback.nextElement());
+        return Collections.enumeration(merged);
     }
 
     @Override
@@ -190,10 +194,6 @@ public class HyinitClassLoader extends SecureClassLoader {
     }
 
     private Class<?> tryLoadClass(String name, boolean allowFromParent) throws ClassNotFoundException {
-        if (name.startsWith(".java")) {
-            return null;
-        }
-
         if (!allowFromParent && !parentSourcedClasses.isEmpty()) {
             int pos = name.length();
 
