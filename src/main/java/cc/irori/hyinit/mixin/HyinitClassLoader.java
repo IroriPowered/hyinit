@@ -239,11 +239,30 @@ public class HyinitClassLoader extends SecureClassLoader {
     }
 
     public byte[] getClassByteArray(String name, boolean runTransformers) throws IOException {
+        byte[] bytes;
         if (runTransformers) {
-            return getPreMixinClassBytes(name);
+            bytes = getPreMixinClassBytes(name);
         } else {
-            return getRawClassBytes(name);
+            bytes = getRawClassBytes(name);
         }
+
+        if (bytes != null) {
+            return bytes;
+        }
+
+        // No class file on disk, test for synthetic class generation for @Accessor and @Invoker
+        if (isTransformerInitialized()) {
+            try {
+                byte[] generated = transformer.generateClass(MixinEnvironment.getCurrentEnvironment(), name);
+                if (generated != null) {
+                    return generated;
+                }
+            } catch (Throwable t) {
+                // Not a synthetic class — fall through
+            }
+        }
+
+        return null;
     }
 
     public byte[] getRawClassBytes(String name) throws IOException {
@@ -393,6 +412,7 @@ public class HyinitClassLoader extends SecureClassLoader {
             "java.", "javax.", "jdk.", "sun.", "com.sun.",
             "org.objectweb.asm.",
             "org.spongepowered.asm.",
+            "com.llamalad7.mixinextras.",
             "cc.irori.hyinit.mixin.", "cc.irori.hyinit.shared.",
             "org.slf4j.", "org.apache.logging.", "ch.qos.logback.",
             "com.google.gson.", "com.google.flogger.",
