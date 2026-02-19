@@ -43,13 +43,19 @@ public final class Main {
                         .getLocation()
                         .toURI()),
                 new SourceMetadata(false));
-        for (Path path : collectClasspathJars(serverJar, cwd.resolve("earlyplugins"))) {
-            classLoader.addCodeSource(path, new SourceMetadata(true));
+        List<Path> earlyPluginDirs = new java.util.ArrayList<>();
+        earlyPluginDirs.add(cwd.resolve("earlyplugins"));
+        earlyPluginDirs.addAll(parseEarlyPluginPaths(args));
+
+        for (Path dir : earlyPluginDirs) {
+            for (Path path : collectClasspathJars(serverJar, dir)) {
+                classLoader.addCodeSource(path, new SourceMetadata(true));
+            }
         }
 
         HyinitMixinService.setGameClassLoader(classLoader);
 
-        ConfigCollector.Result result = ConfigCollector.collectMixinConfigs(cwd);
+        ConfigCollector.Result result = ConfigCollector.collectMixinConfigs(cwd, earlyPluginDirs);
         result.warnings().forEach(LOGGER::warn);
 
         List<String> configs = result.configs();
@@ -110,6 +116,23 @@ public final class Main {
                     .toList();
         }
         return List.of();
+    }
+
+    private static List<Path> parseEarlyPluginPaths(String[] args) {
+        List<Path> paths = new java.util.ArrayList<>();
+        for (int i = 0; i < args.length; i++) {
+            if (args[i].equals("--early-plugins") && i + 1 < args.length) {
+                for (String pathStr : args[i + 1].split(",")) {
+                    paths.add(Paths.get(pathStr.trim()));
+                }
+            } else if (args[i].startsWith("--early-plugins=")) {
+                String value = args[i].substring("--early-plugins=".length());
+                for (String pathStr : value.split(",")) {
+                    paths.add(Paths.get(pathStr.trim()));
+                }
+            }
+        }
+        return paths;
     }
 
     private static void finishMixinBootstrapping() {
