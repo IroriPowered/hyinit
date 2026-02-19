@@ -10,8 +10,8 @@ import java.io.IOException;
 import java.net.URL;
 import java.net.URLClassLoader;
 import java.security.CodeSource;
+import java.util.Collections;
 import java.util.Enumeration;
-import java.util.NoSuchElementException;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -33,8 +33,9 @@ public class MixinPluginClassLoader extends URLClassLoader {
             String name,
             boolean useBridge,
             CallbackInfoReturnable<Class<?>> cir,
-            @Local(name = "loadClass") Class<?> loadClass)
+            @Local(ordinal = 0) Class<?> loadClass)
             throws ClassNotFoundException {
+        if (loadClass == null) return;
         String fileName = LoaderUtil.getClassFileName(name);
         URL url = super.getResource(fileName);
         if (url != null) {
@@ -77,17 +78,7 @@ public class MixinPluginClassLoader extends URLClassLoader {
     private Enumeration<URL> hyinit$blockLoadingManifestResources(ClassLoader instance, String name)
             throws IOException {
         if (name.equalsIgnoreCase("manifest.json")) {
-            return new Enumeration<>() {
-                @Override
-                public boolean hasMoreElements() {
-                    return false;
-                }
-
-                @Override
-                public URL nextElement() {
-                    throw new NoSuchElementException();
-                }
-            };
+            return Collections.emptyEnumeration();
         }
         return instance.getResources(name);
     }
