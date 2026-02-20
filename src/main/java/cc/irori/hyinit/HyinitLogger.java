@@ -162,19 +162,24 @@ public final class HyinitLogger implements ILogger {
 
     @Override
     public <T extends Throwable> T throwing(T t) {
-        hytaleLogger.atWarning().withCause(t).log();
+        if (isHytaleLoggerAvailable()) {
+            hytaleLogger.atWarning().withCause(t).log();
+        } else {
+            JAVA_LOGGER.warn("throwing", t);
+        }
         return t;
     }
 
     private boolean isHytaleLoggerAvailable() {
-        if (hytaleLogger == null) {
-            try {
-                hytaleLogger = HytaleLogger.get(LOGGER_NAME);
-                return true;
-            } catch (NoClassDefFoundError | Exception ignored) {
-            }
+        if (hytaleLogger != null) {
+            return true;
         }
-        return false;
+        try {
+            hytaleLogger = HytaleLogger.get(LOGGER_NAME);
+            return hytaleLogger != null;
+        } catch (NoClassDefFoundError | Exception ignored) {
+            return false;
+        }
     }
 
     private static java.util.logging.Level toJavaLevel(Level level) {

@@ -1,7 +1,9 @@
 package cc.irori.hyinit.mixin.impl;
 
+import cc.irori.hyinit.shared.SourceMetaStore;
+import cc.irori.hyinit.shared.SourceMetadata;
+import cc.irori.hyinit.util.LoaderUtil;
 import cc.irori.hyinit.util.UrlUtil;
-import com.hypixel.hytale.Main;
 import com.hypixel.hytale.server.core.plugin.PluginManager;
 import java.io.IOException;
 import java.net.JarURLConnection;
@@ -23,8 +25,9 @@ public abstract class MixinPluginManager {
                             value = "INVOKE",
                             target = "Ljava/lang/ClassLoader;getResources(Ljava/lang/String;)Ljava/util/Enumeration;"))
     private Enumeration<URL> hyinit$redirectManifestResources(ClassLoader instance, String name) throws IOException {
-        Path hytaleJarPath =
-                UrlUtil.asPath(Main.class.getProtectionDomain().getCodeSource().getLocation());
+        // allow server and other classpath plugins through
+        Path hyinitJarPath = UrlUtil.asPath(
+                cc.irori.hyinit.Main.class.getProtectionDomain().getCodeSource().getLocation());
 
         List<URL> urls = new ArrayList<>();
         Enumeration<URL> resources = instance.getResources(name);
@@ -34,13 +37,16 @@ public abstract class MixinPluginManager {
             if (connection instanceof JarURLConnection jarConnection) {
                 Path jarPath = UrlUtil.asPath(jarConnection.getJarFileURL());
 
-                // TODO: Allow other classpath plugins to be loaded - This impl breaks classpath plugin loading
-                if (jarPath.equals(hytaleJarPath)) {
-                    urls.add(url);
+                if (jarPath.equals(hyinitJarPath)) {
+                    continue;
                 }
-            } else {
-                urls.add(url);
+
+                SourceMetadata meta = SourceMetaStore.get(LoaderUtil.normalizeExistingPath(jarPath));
+                if (meta != null && meta.isEarlyPlugin()) {
+                    continue;
+                }
             }
+            urls.add(url);
         }
         return Collections.enumeration(urls);
     }

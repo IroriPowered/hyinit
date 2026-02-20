@@ -25,39 +25,45 @@ public final class ConfigCollector {
     private ConfigCollector() {}
 
     public static Result collectMixinConfigs(Path workingDir) {
+        return collectMixinConfigs(workingDir, List.of(workingDir.resolve("earlyplugins")));
+    }
+
+    public static Result collectMixinConfigs(Path workingDir, List<Path> earlyPluginDirs) {
         Objects.requireNonNull(workingDir, "workingDir");
+        Objects.requireNonNull(earlyPluginDirs, "earlyPluginDirs");
 
-        Path dir = workingDir.resolve("earlyplugins");
-        if (!Files.isDirectory(dir)) {
-            return new Result(List.of(), Map.of(), List.of());
-        }
-
-        List<Path> jars = listJars(dir);
         List<String> warnings = new ArrayList<>();
         Map<String, Path> origins = new LinkedHashMap<>();
-
-        // Preserve order, deduplicate
         LinkedHashSet<String> configs = new LinkedHashSet<>();
 
-        for (Path jar : jars) {
-            try (JarFile jf = new JarFile(jar.toFile(), false)) {
-                JarEntry entry = jf.getJarEntry("manifest.json");
-                if (entry == null) continue;
+        for (Path dir : earlyPluginDirs) {
+            if (!Files.isDirectory(dir)) {
+                continue;
+            }
 
-                JsonObject root = readJsonObject(jf, entry);
-                List<String> found = extractMixinConfigs(root);
+            List<Path> jars = listJars(dir);
 
-                for (String cfg : found) {
-                    if (cfg == null) continue;
-                    String normalized = normalizeConfigPath(cfg);
-                    if (normalized.isEmpty()) continue;
+            for (Path jar : jars) {
+                try (JarFile jf = new JarFile(jar.toFile(), false)) {
+                    JarEntry entry = jf.getJarEntry("manifest.json");
+                    if (entry == null) continue;
 
-                    configs.add(normalized);
-                    origins.putIfAbsent(normalized, jar);
+                    JsonObject root = readJsonObject(jf, entry);
+                    List<String> found = extractMixinConfigs(root);
+
+                    for (String cfg : found) {
+                        if (cfg == null) continue;
+                        String normalized = normalizeConfigPath(cfg);
+                        if (normalized.isEmpty()) continue;
+
+                        configs.add(normalized);
+                        origins.putIfAbsent(normalized, jar);
+                    }
+                } catch (Exception e) {
+                    warnings.add("Failed to read " + jar.getFileName() + ": "
+                            + e.getClass().getSimpleName()
+                            + (e.getMessage() != null ? (": " + e.getMessage()) : ""));
                 }
-            } catch (Exception e) {
-                warnings.add("Failed to read " + jar.getFileName() + ": "
-                        + e.getClass().getSimpleName() + (e.getMessage() != null ? (": " + e.getMessage()) : ""));
             }
         }
 

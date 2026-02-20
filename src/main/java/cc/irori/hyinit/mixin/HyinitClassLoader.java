@@ -1,21 +1,41 @@
 package cc.irori.hyinit.mixin;
 
-import cc.irori.hyinit.HyinitLogger;
-import cc.irori.hyinit.shared.SourceMetaStore;
-import cc.irori.hyinit.shared.SourceMetadata;
-import cc.irori.hyinit.util.*;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.net.*;
-import java.nio.file.*;
+import java.net.JarURLConnection;
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.net.URL;
+import java.net.URLConnection;
+import java.nio.file.FileSystem;
+import java.nio.file.FileSystemAlreadyExistsException;
+import java.nio.file.FileSystemNotFoundException;
+import java.nio.file.FileSystems;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.security.CodeSource;
 import java.security.SecureClassLoader;
 import java.security.cert.Certificate;
-import java.util.*;
+import java.util.Collections;
+import java.util.Enumeration;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.jar.Manifest;
+
+import org.spongepowered.asm.mixin.MixinEnvironment;
 import org.spongepowered.asm.mixin.transformer.IMixinTransformer;
+
+import cc.irori.hyinit.HyinitLogger;
+import cc.irori.hyinit.shared.SourceMetaStore;
+import cc.irori.hyinit.shared.SourceMetadata;
+import cc.irori.hyinit.util.LoaderUtil;
+import cc.irori.hyinit.util.ManifestUtil;
+import cc.irori.hyinit.util.UrlConversionException;
+import cc.irori.hyinit.util.UrlUtil;
 
 public class HyinitClassLoader extends SecureClassLoader {
 
@@ -114,11 +134,15 @@ public class HyinitClassLoader extends SecureClassLoader {
     public Enumeration<URL> getResources(String name) throws IOException {
         Objects.requireNonNull(name, "name");
 
-        Enumeration<URL> resources = urlLoader.getResources(name);
-        if (!resources.hasMoreElements()) {
-            return originalLoader.getResources(name);
-        }
-        return resources;
+        Enumeration<URL> primary = urlLoader.getResources(name);
+        Enumeration<URL> fallback = originalLoader.getResources(name);
+
+        if (!primary.hasMoreElements()) return fallback;
+        if (!fallback.hasMoreElements()) return primary;
+
+        var merged = Collections.list(primary);
+        while (fallback.hasMoreElements()) merged.add(fallback.nextElement());
+        return Collections.enumeration(merged);
     }
 
     @Override
@@ -170,10 +194,6 @@ public class HyinitClassLoader extends SecureClassLoader {
     }
 
     private Class<?> tryLoadClass(String name, boolean allowFromParent) throws ClassNotFoundException {
-        if (name.startsWith(".java")) {
-            return null;
-        }
-
         if (!allowFromParent && !parentSourcedClasses.isEmpty()) {
             int pos = name.length();
 
@@ -219,11 +239,30 @@ public class HyinitClassLoader extends SecureClassLoader {
     }
 
     public byte[] getClassByteArray(String name, boolean runTransformers) throws IOException {
+        byte[] bytes;
         if (runTransformers) {
-            return getPreMixinClassBytes(name);
+            bytes = getPreMixinClassBytes(name);
         } else {
-            return getRawClassBytes(name);
+            bytes = getRawClassBytes(name);
         }
+
+        if (bytes != null) {
+            return bytes;
+        }
+
+        // No class file on disk, test for synthetic class generation for @Accessor and @Invoker
+        if (isTransformerInitialized()) {
+            try {
+                byte[] generated = transformer.generateClass(MixinEnvironment.getCurrentEnvironment(), name);
+                if (generated != null) {
+                    return generated;
+                }
+            } catch (Throwable t) {
+                // Not a synthetic class — fall through
+            }
+        }
+
+        return null;
     }
 
     public byte[] getRawClassBytes(String name) throws IOException {
@@ -281,13 +320,30 @@ public class HyinitClassLoader extends SecureClassLoader {
             return original;
         }
 
-        try {
-            return transformer.transformClassBytes(name, name, original);
-        } catch (Throwable t) {
-            String message = String.format("Mixin transformation of %s failed", name);
-            HyinitLogger.get().error(message, t);
-            throw new RuntimeException(message, t);
+        if (original != null) {
+            try {
+                return transformer.transformClassBytes(name, name, original);
+            } catch (Throwable t) {
+                String message = String.format("Mixin transformation of %s failed", name);
+                HyinitLogger.get().error(message, t);
+                throw new RuntimeException(message, t);
+            }
         }
+
+        // No class file on disk, proceed with Mixin's generateClass for synthetics
+        try {
+            byte[] generated = transformer.generateClass(MixinEnvironment.getCurrentEnvironment(), name);
+            if (generated != null) {
+                if (DEBUG) {
+                    HyinitLogger.get().info(String.format("Generated synthetic class: %s (%d bytes)", name, generated.length));
+                }
+                return generated;
+            }
+        } catch (Throwable t) {
+            // fall through on no synthetic classes
+        }
+
+        return null;
     }
 
     public boolean isClassLoaded(String name) {
@@ -352,8 +408,24 @@ public class HyinitClassLoader extends SecureClassLoader {
         });
     }
 
+    private static final Set<String> TRANSFORM_EXCLUSIONS = Set.of(
+            "java.", "javax.", "jdk.", "sun.", "com.sun.",
+            "org.objectweb.asm.",
+            "org.spongepowered.asm.",
+            "com.llamalad7.mixinextras.",
+            "cc.irori.hyinit.mixin.", "cc.irori.hyinit.shared.",
+            "org.slf4j.", "org.apache.logging.", "ch.qos.logback.",
+            "com.google.gson.", "com.google.flogger.",
+            "org.bouncycastle.",
+            "com.hypixel.hytale.plugin.early.");
+
     private static boolean canTransformClass(String name) {
-        return true; // Placeholder
+        for (String prefix : TRANSFORM_EXCLUSIONS) {
+            if (name.startsWith(prefix)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static boolean hasRegularCodeSource(URL url) {
