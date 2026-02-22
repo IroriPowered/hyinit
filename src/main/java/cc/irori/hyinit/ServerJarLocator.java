@@ -82,9 +82,8 @@ public final class ServerJarLocator {
     private static boolean isValue(String arg, String[] args) {
         for (int i = 0; i < args.length; i++) {
             for (String key : ARG_KEYS) {
-                String prefix = key + "=";
-                if ((isKey(args[i])) && i + 1 < args.length) {
-                    return !args[i].startsWith(prefix) && arg.equals(args[i + 1]);
+                if (key.equals(args[i]) && i + 1 < args.length && arg.equals(args[i + 1])) {
+                    return true;
                 }
             }
         }
