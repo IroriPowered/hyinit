@@ -13,7 +13,8 @@ import java.util.stream.Stream;
 
 public final class ServerJarLocator {
 
-    private static final String[] ARG_KEYS = {"--server-jar", "--serverJar"};
+    private static final String[] SERVER_JAR_KEYS = {"--server-jar", "--serverJar"};
+    private static final String[] ARG_KEYS = {"--server-jar", "--serverJar", "--early-plugins"};
 
     private static final String DEFAULT_SERVER_JAR = "HytaleServer.jar";
 
@@ -48,7 +49,7 @@ public final class ServerJarLocator {
             String a = args[i];
 
             // --server-jar=<path> / --serverJar=<path>
-            for (String key : ARG_KEYS) {
+            for (String key : SERVER_JAR_KEYS) {
                 String prefix = key + "=";
                 if (a.startsWith(prefix) && a.length() > prefix.length()) {
                     return Optional.of(Paths.get(a.substring(prefix.length())));
@@ -56,11 +57,18 @@ public final class ServerJarLocator {
             }
 
             // --server-jar <path> / --serverJar <path>
-            if (isKey(a) && i + 1 < args.length) {
+            if (isServerJarKey(a) && i + 1 < args.length) {
                 return Optional.of(Paths.get(args[i + 1]));
             }
         }
         return Optional.empty();
+    }
+
+    private static boolean isServerJarKey(String arg) {
+        for (String key : SERVER_JAR_KEYS) {
+            if (key.equals(arg)) return true;
+        }
+        return false;
     }
 
     private static boolean isKey(String arg) {

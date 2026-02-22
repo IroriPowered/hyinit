@@ -42,7 +42,7 @@ public abstract class MixinPluginManager {
                 }
 
                 SourceMetadata meta = SourceMetaStore.get(LoaderUtil.normalizeExistingPath(jarPath));
-                if (meta != null && meta.isEarlyPlugin()) {
+                if (meta != null && meta.isEarlyPlugin() && !meta.hasMainClass()) {
                     continue;
                 }
             }
