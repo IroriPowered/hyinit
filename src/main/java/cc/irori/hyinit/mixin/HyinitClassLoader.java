@@ -235,7 +235,11 @@ public class HyinitClassLoader extends SecureClassLoader {
             }
         }
 
-        return defineClass(name, input, 0, input.length, metadata.codeSource);
+        try {
+            return defineClass(name, input, 0, input.length, metadata.codeSource);
+        } catch (NoClassDefFoundError e) {
+            throw new ClassNotFoundException(name, e);
+        }
     }
 
     public byte[] getClassByteArray(String name, boolean runTransformers) throws IOException {
