@@ -154,6 +154,8 @@ public class HyinitClassLoader extends SecureClassLoader {
                     c = originalLoader.loadClass(name);
                 } else if (name.startsWith("java.")) {
                     c = PLATFORM_CLASS_LOADER.loadClass(name);
+                } else if (isParentDelegated(name)) {
+                    c = originalLoader.loadClass(name);
                 } else {
                     c = tryLoadClass(name, false);
 
@@ -405,6 +407,18 @@ public class HyinitClassLoader extends SecureClassLoader {
 
             return new Metadata(manifest, new CodeSource(UrlUtil.asUrl(path), certificates));
         });
+    }
+
+    private static final Set<String> PARENT_DELEGATED =
+            Set.of("org.objectweb.asm.", "org.spongepowered.asm.", "com.llamalad7.mixinextras.");
+
+    private static boolean isParentDelegated(String name) {
+        for (String prefix : PARENT_DELEGATED) {
+            if (name.startsWith(prefix)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static final Set<String> TRANSFORM_EXCLUSIONS = Set.of(

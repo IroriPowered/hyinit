@@ -1,5 +1,6 @@
 package cc.irori.hyinit.mixin.impl;
 
+import cc.irori.hyinit.HyinitLogger;
 import cc.irori.hyinit.shared.SourceMetaStore;
 import cc.irori.hyinit.shared.SourceMetadata;
 import cc.irori.hyinit.util.LoaderUtil;
@@ -23,6 +24,14 @@ public class MixinPluginClassLoader extends URLClassLoader {
 
     public MixinPluginClassLoader(URL[] urls, ClassLoader parent) {
         super(urls, parent);
+    }
+
+    @Inject(method = "loadLocalClass", at = @At("HEAD"), cancellable = true)
+    private void hyinit$guardNullClassName(String name, CallbackInfoReturnable<Class<?>> cir) {
+        if (name == null) {
+            HyinitLogger.get().warn("Skipping loadLocalClass with null class name");
+            cir.setReturnValue(null);
+        }
     }
 
     // OrbisGuard compatibility:
