@@ -35,6 +35,7 @@ public final class ConfigCollector {
         List<String> warnings = new ArrayList<>();
         Map<String, Path> origins = new LinkedHashMap<>();
         LinkedHashSet<String> configs = new LinkedHashSet<>();
+        Set<Path> jarsWithMainClass = new LinkedHashSet<>();
 
         for (Path dir : earlyPluginDirs) {
             if (!Files.isDirectory(dir)) {
@@ -49,6 +50,11 @@ public final class ConfigCollector {
                     if (entry == null) continue;
 
                     JsonObject root = readJsonObject(jf, entry);
+
+                    if (hasMainClass(root)) {
+                        jarsWithMainClass.add(jar);
+                    }
+
                     List<String> found = extractMixinConfigs(root);
 
                     for (String cfg : found) {
@@ -67,7 +73,11 @@ public final class ConfigCollector {
             }
         }
 
-        return new Result(List.copyOf(configs), Collections.unmodifiableMap(origins), List.copyOf(warnings));
+        return new Result(
+                List.copyOf(configs),
+                Collections.unmodifiableMap(origins),
+                Collections.unmodifiableSet(jarsWithMainClass),
+                List.copyOf(warnings));
     }
 
     private static List<Path> listJars(Path dir) {
@@ -91,6 +101,12 @@ public final class ConfigCollector {
             }
             return el.getAsJsonObject();
         }
+    }
+
+    private static boolean hasMainClass(JsonObject root) {
+        return root.has("Main")
+                && root.get("Main").isJsonPrimitive()
+                && !root.get("Main").getAsString().isEmpty();
     }
 
     private static List<String> extractMixinConfigs(JsonObject root) {
@@ -117,11 +133,14 @@ public final class ConfigCollector {
     public static final class Result {
         private final List<String> configs;
         private final Map<String, Path> origins;
+        private final Set<Path> jarsWithMainClass;
         private final List<String> warnings;
 
-        public Result(List<String> configs, Map<String, Path> origins, List<String> warnings) {
+        public Result(
+                List<String> configs, Map<String, Path> origins, Set<Path> jarsWithMainClass, List<String> warnings) {
             this.configs = Objects.requireNonNull(configs, "configs");
             this.origins = Objects.requireNonNull(origins, "origins");
+            this.jarsWithMainClass = Objects.requireNonNull(jarsWithMainClass, "jarsWithMainClass");
             this.warnings = Objects.requireNonNull(warnings, "warnings");
         }
 
@@ -131,6 +150,10 @@ public final class ConfigCollector {
 
         public Map<String, Path> origins() {
             return origins;
+        }
+
+        public Set<Path> jarsWithMainClass() {
+            return jarsWithMainClass;
         }
 
         public List<String> warnings() {

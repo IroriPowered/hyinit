@@ -47,16 +47,17 @@ public final class Main {
         earlyPluginDirs.add(cwd.resolve("earlyplugins"));
         earlyPluginDirs.addAll(parseEarlyPluginPaths(args));
 
+        ConfigCollector.Result result = ConfigCollector.collectMixinConfigs(cwd, earlyPluginDirs);
+        result.warnings().forEach(LOGGER::warn);
+
         for (Path dir : earlyPluginDirs) {
             for (Path path : collectClasspathJars(serverJar, dir)) {
-                classLoader.addCodeSource(path, new SourceMetadata(true));
+                boolean hasMain = result.jarsWithMainClass().contains(path);
+                classLoader.addCodeSource(path, new SourceMetadata(true, hasMain));
             }
         }
 
         HyinitMixinService.setGameClassLoader(classLoader);
-
-        ConfigCollector.Result result = ConfigCollector.collectMixinConfigs(cwd, earlyPluginDirs);
-        result.warnings().forEach(LOGGER::warn);
 
         List<String> configs = result.configs();
         LOGGER.info("Found " + configs.size() + " Mixin config(s):");
