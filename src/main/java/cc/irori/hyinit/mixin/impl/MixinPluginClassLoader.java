@@ -64,6 +64,19 @@ public class MixinPluginClassLoader extends URLClassLoader {
         }
     }
 
+    @Inject(method = "loadClass0", at = @At("HEAD"), cancellable = true)
+    private void hyinit$routeMixinAccessorToHyinit(
+            String name, boolean useBridge, CallbackInfoReturnable<Class<?>> cir) {
+        if (name == null || !name.contains(".mixin.")) return;
+        try {
+            Class<?> hyinitClass = HyinitLogger.class.getClassLoader().loadClass(name);
+            if (hyinitClass != null) {
+                cir.setReturnValue(hyinitClass);
+            }
+        } catch (ClassNotFoundException ignored) {
+        }
+    }
+
     // Certain plugins may attempt to use getResource to read its manifest file (why),
     // this causes a conflict with HyinitClassLoader that includes manifests of early plugins.
 
