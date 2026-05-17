@@ -28,6 +28,7 @@ spotless {
 repositories {
     mavenCentral()
     maven("https://maven.hytale.com/release")
+    maven("https://maven.hytale.com/pre-release")
 }
 
 dependencies {
