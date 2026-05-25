@@ -30,13 +30,17 @@ public abstract class MixinPluginManager {
     private static final Pattern LEGACY_VERSION = Pattern.compile("^\\d{4}\\.\\d{2}\\.\\d{2}-[0-9a-f]+$");
 
     @Shadow
-    private PendingLoadJavaPlugin loadPendingJavaPlugin(Path path) { return null; }
+    private PendingLoadJavaPlugin loadPendingJavaPlugin(Path path) {
+        return null;
+    }
 
     @Redirect(
             method = "loadPluginsFromDirectory",
-            at = @At(
-                    value = "INVOKE",
-                    target = "Lcom/hypixel/hytale/server/core/plugin/PluginManager;loadPendingJavaPlugin(Ljava/nio/file/Path;)Lcom/hypixel/hytale/server/core/plugin/pending/PendingLoadJavaPlugin;"))
+            at =
+                    @At(
+                            value = "INVOKE",
+                            target =
+                                    "Lcom/hypixel/hytale/server/core/plugin/PluginManager;loadPendingJavaPlugin(Ljava/nio/file/Path;)Lcom/hypixel/hytale/server/core/plugin/pending/PendingLoadJavaPlugin;"))
     private PendingLoadJavaPlugin hyinit$safeLoadPendingJavaPlugin(PluginManager self, Path path) {
         hyinit$patchLegacyManifest(path);
         try {
@@ -59,7 +63,8 @@ public abstract class MixinPluginManager {
             if (obj == null || !obj.has("ServerVersion")) return;
             String sv = obj.get("ServerVersion").getAsString();
             if (!LEGACY_VERSION.matcher(sv).matches()) {
-                System.out.println("[Hyinit] Plugin " + jarPath.getFileName() + " ServerVersion '" + sv + "' is not legacy format, skipping patch");
+                System.out.println("[Hyinit] Plugin " + jarPath.getFileName() + " ServerVersion '" + sv
+                        + "' is not legacy format, skipping patch");
                 return;
             }
             obj.addProperty("ServerVersion", ">=0.4.0");
@@ -67,7 +72,7 @@ public abstract class MixinPluginManager {
             File tmp = File.createTempFile("hyinit-patch-", ".jar");
             try {
                 try (ZipFile src = new ZipFile(jarPath.toFile());
-                     ZipOutputStream zos = new ZipOutputStream(new FileOutputStream(tmp))) {
+                        ZipOutputStream zos = new ZipOutputStream(new FileOutputStream(tmp))) {
                     Enumeration<? extends ZipEntry> entries = src.entries();
                     while (entries.hasMoreElements()) {
                         ZipEntry e = entries.nextElement();
@@ -83,7 +88,8 @@ public abstract class MixinPluginManager {
                     }
                 }
                 java.nio.file.Files.copy(tmp.toPath(), jarPath, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-                System.out.println("[Hyinit] Patched legacy ServerVersion '" + sv + "' -> '>=0.4.0' in " + jarPath.getFileName());
+                System.out.println(
+                        "[Hyinit] Patched legacy ServerVersion '" + sv + "' -> '>=0.4.0' in " + jarPath.getFileName());
             } finally {
                 tmp.delete();
             }
