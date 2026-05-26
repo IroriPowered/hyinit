@@ -37,7 +37,7 @@ public class MixinPluginClassLoader extends URLClassLoader {
     // OrbisGuard compatibility:
     // When the same class is present in both the earlyplugin jar and the mod jar, prioritize the mod's.
     // To do this, we need to check the SourceMetadata of the loaded class.
-    @Inject(method = "loadClass0", at = @At(value = "RETURN", ordinal = 0), cancellable = true)
+    @Inject(method = "loadClass0", at = @At(value = "RETURN", ordinal = 1), cancellable = true)
     private void hyinit$prioritizeLocalModClass(
             String name,
             boolean useBridge,
@@ -45,6 +45,7 @@ public class MixinPluginClassLoader extends URLClassLoader {
             @Local(ordinal = 0) Class<?> loadClass)
             throws ClassNotFoundException {
         if (loadClass == null) return;
+        if (loadClass.getClassLoader() == this) return;
         String fileName = LoaderUtil.getClassFileName(name);
         URL url = super.getResource(fileName);
         if (url != null) {
@@ -53,7 +54,7 @@ public class MixinPluginClassLoader extends URLClassLoader {
                 SourceMetadata meta = SourceMetaStore.get(UrlUtil.asPath(codeSource.getLocation()));
                 if (meta.isEarlyPlugin()) {
                     try {
-                        Class<?> pluginClass = super.loadClass(name, false);
+                        Class<?> pluginClass = super.findClass(name);
                         if (pluginClass != null) {
                             cir.setReturnValue(pluginClass);
                         }
