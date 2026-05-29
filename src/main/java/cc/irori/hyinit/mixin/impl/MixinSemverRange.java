@@ -6,7 +6,6 @@ import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
-import org.spongepowered.asm.mixin.injection.ModifyVariable;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 @Mixin(SemverRange.class)
@@ -23,14 +22,5 @@ public class MixinSemverRange {
         if (str != null && LEGACY_VERSION.matcher(str.trim()).matches()) {
             cir.setReturnValue(SemverRange.fromString("*"));
         }
-    }
-
-    @ModifyVariable(
-            method = "fromString(Ljava/lang/String;Z)Lcom/hypixel/hytale/common/semver/SemverRange;",
-            at = @At("HEAD"),
-            argsOnly = true,
-            ordinal = 0)
-    private static String hyinit$stripWhitespace(String str) {
-        return str == null ? str : str.replaceAll("\\s+", "");
     }
 }
