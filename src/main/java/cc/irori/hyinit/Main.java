@@ -6,6 +6,7 @@ import cc.irori.hyinit.mixin.HyinitMixinService;
 import cc.irori.hyinit.shared.SourceMetadata;
 import cc.irori.hyinit.util.SneakyThrow;
 import com.llamalad7.mixinextras.MixinExtrasBootstrap;
+import java.io.IOException;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
@@ -13,8 +14,12 @@ import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import org.spongepowered.asm.launch.MixinBootstrap;
 import org.spongepowered.asm.mixin.MixinEnvironment;
 import org.spongepowered.asm.mixin.Mixins;
@@ -29,9 +34,11 @@ public final class Main {
         Path cwd = Paths.get("").toAbsolutePath().normalize();
 
         Path serverJar = ServerJarLocator.locate(args);
+
         // Remove args used by hyinit so we don't pass them to the server
         // causing a "UnrecognizedOptionException"
         final String[] serverArgs = ServerJarLocator.stripArgs(args);
+
         System.out.println("Using server jar: " + serverJar);
 
         HyinitClassLoader classLoader = new HyinitClassLoader();
@@ -43,17 +50,29 @@ public final class Main {
                         .getLocation()
                         .toURI()),
                 new SourceMetadata(false));
-        List<Path> earlyPluginDirs = new java.util.ArrayList<>();
-        earlyPluginDirs.add(cwd.resolve("earlyplugins"));
-        earlyPluginDirs.addAll(parseEarlyPluginPaths(args));
+
+        Set<Path> earlyPluginDirsSet = new LinkedHashSet<>();
+        addEarlyPluginDirectory(earlyPluginDirsSet, cwd.resolve("earlyplugins"));
+        Path selfDir = ServerJarLocator.getSelfDirectory();
+        if (selfDir != null) {
+            addEarlyPluginDirectory(earlyPluginDirsSet, selfDir.resolve("earlyplugins"));
+        }
+        for (Path p : parseEarlyPluginPaths(args)) {
+            addEarlyPluginDirectory(earlyPluginDirsSet, p);
+        }
+        List<Path> earlyPluginDirs = new ArrayList<>(earlyPluginDirsSet);
 
         ConfigCollector.Result result = ConfigCollector.collectMixinConfigs(cwd, earlyPluginDirs);
         result.warnings().forEach(LOGGER::warn);
 
+        Set<Path> addedJars = new HashSet<>();
         for (Path dir : earlyPluginDirs) {
             for (Path path : collectClasspathJars(serverJar, dir)) {
-                boolean hasMain = result.jarsWithMainClass().contains(path);
-                classLoader.addCodeSource(path, new SourceMetadata(true, hasMain));
+                Path normalized = path.toRealPath();
+                if (addedJars.add(normalized) && !result.excludedJars().contains(normalized)) {
+                    boolean hasMain = result.jarsWithMainClass().contains(normalized);
+                    classLoader.addCodeSource(normalized, new SourceMetadata(true, hasMain));
+                }
             }
         }
 
@@ -88,6 +107,7 @@ public final class Main {
         }
 
         Mixins.addConfiguration("_hyinit.mixins.json");
+
         finishMixinBootstrapping();
 
         LOGGER.info("Starting HytaleServer");
@@ -107,6 +127,12 @@ public final class Main {
         thread.start();
     }
 
+    private static void addEarlyPluginDirectory(Set<Path> directories, Path directory) throws IOException {
+        if (Files.isDirectory(directory)) {
+            directories.add(directory.toRealPath());
+        }
+    }
+
     private static List<Path> collectClasspathJars(Path serverJar, Path earlyPluginsDir) throws Exception {
         if (Files.isDirectory(earlyPluginsDir)) {
             return Files.list(earlyPluginsDir)
@@ -116,11 +142,12 @@ public final class Main {
                     .sorted()
                     .toList();
         }
+
         return List.of();
     }
 
     private static List<Path> parseEarlyPluginPaths(String[] args) {
-        List<Path> paths = new java.util.ArrayList<>();
+        List<Path> paths = new ArrayList<>();
         for (int i = 0; i < args.length; i++) {
             if (args[i].equals("--early-plugins") && i + 1 < args.length) {
                 for (String pathStr : args[i + 1].split(",")) {

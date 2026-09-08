@@ -1,6 +1,7 @@
 package cc.irori.hyinit;
 
 import java.io.IOException;
+import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -15,7 +16,6 @@ public final class ServerJarLocator {
 
     private static final String[] SERVER_JAR_KEYS = {"--server-jar", "--serverJar"};
     private static final String[] ARG_KEYS = {"--server-jar", "--serverJar", "--early-plugins"};
-
     private static final String DEFAULT_SERVER_JAR = "HytaleServer.jar";
 
     // Private constructor to prevent instantiation
@@ -31,17 +31,38 @@ public final class ServerJarLocator {
 
         Path cwd = Paths.get("").toAbsolutePath().normalize();
 
-        Path defaultJar = cwd.resolve(DEFAULT_SERVER_JAR);
-        if (isHytaleServer(defaultJar)) {
-            return defaultJar;
+        Optional<Path> scannedCwd = scanJarCandidates(cwd);
+        if (scannedCwd.isPresent()) {
+            return scannedCwd.get();
         }
 
-        Optional<Path> scanned = scanJarCandidates(cwd);
-        if (scanned.isPresent()) {
-            return scanned.get();
+        Path selfDir = getSelfDirectory();
+        if (selfDir != null && !selfDir.equals(cwd)) {
+            Optional<Path> scannedSelf = scanJarCandidates(selfDir);
+            if (scannedSelf.isPresent()) {
+                return scannedSelf.get();
+            }
         }
 
         throw new IllegalArgumentException("Could not locate HytaleServer. Specify the path using --server-jar");
+    }
+
+    public static Path getSelfDirectory() {
+        try {
+            URI uri = ServerJarLocator.class
+                    .getProtectionDomain()
+                    .getCodeSource()
+                    .getLocation()
+                    .toURI();
+            Path path = Paths.get(uri).toRealPath();
+            if (Files.isRegularFile(path)) {
+                return path.getParent();
+            } else if (Files.isDirectory(path)) {
+                return path;
+            }
+        } catch (Exception ignored) {
+        }
+        return null;
     }
 
     private static Optional<Path> parseServerJarArg(String[] args) {
@@ -61,6 +82,7 @@ public final class ServerJarLocator {
                 return Optional.of(Paths.get(args[i + 1]));
             }
         }
+
         return Optional.empty();
     }
 
@@ -98,10 +120,16 @@ public final class ServerJarLocator {
     }
 
     private static Optional<Path> scanJarCandidates(Path dir) {
+        Path defaultJar = dir.resolve(DEFAULT_SERVER_JAR);
+        if (isHytaleServer(defaultJar)) {
+            return Optional.of(defaultJar);
+        }
+
         try (Stream<Path> s = Files.list(dir)) {
             return s.filter(Files::isRegularFile)
                     .filter(p ->
                             p.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".jar"))
+                    .sorted()
                     .filter(ServerJarLocator::isHytaleServer)
                     .findFirst();
         } catch (IOException e) {

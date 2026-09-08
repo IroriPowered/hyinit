@@ -36,40 +36,56 @@ public final class ConfigCollector {
         Map<String, Path> origins = new LinkedHashMap<>();
         LinkedHashSet<String> configs = new LinkedHashSet<>();
         Set<Path> jarsWithMainClass = new LinkedHashSet<>();
+        Set<Path> excludedJars = new HashSet<>();
+        Set<String> seenPluginIds = new HashSet<>();
+        Set<Path> jars = new TreeSet<>();
 
         for (Path dir : earlyPluginDirs) {
             if (!Files.isDirectory(dir)) {
                 continue;
             }
-
-            List<Path> jars = listJars(dir);
-
-            for (Path jar : jars) {
-                try (JarFile jf = new JarFile(jar.toFile(), false)) {
-                    JarEntry entry = jf.getJarEntry("manifest.json");
-                    if (entry == null) continue;
-
-                    JsonObject root = readJsonObject(jf, entry);
-
-                    if (hasMainClass(root)) {
-                        jarsWithMainClass.add(jar);
-                    }
-
-                    List<String> found = extractMixinConfigs(root);
-
-                    for (String cfg : found) {
-                        if (cfg == null) continue;
-                        String normalized = normalizeConfigPath(cfg);
-                        if (normalized.isEmpty()) continue;
-
-                        configs.add(normalized);
-                        origins.putIfAbsent(normalized, jar);
-                    }
-                } catch (Exception e) {
-                    warnings.add("Failed to read " + jar.getFileName() + ": "
-                            + e.getClass().getSimpleName()
-                            + (e.getMessage() != null ? (": " + e.getMessage()) : ""));
+            for (Path jar : listJars(dir)) {
+                try {
+                    jars.add(jar.toRealPath());
+                } catch (IOException e) {
+                    warnings.add("Failed to resolve " + jar + ": " + e.getMessage());
                 }
+            }
+        }
+
+        for (Path jar : jars) {
+            try (JarFile jf = new JarFile(jar.toFile(), false)) {
+                JarEntry entry = jf.getJarEntry("manifest.json");
+                if (entry == null) continue;
+
+                JsonObject root = readJsonObject(jf, entry);
+                String group = root.has("Group") ? root.get("Group").getAsString() : "";
+                String name = root.has("Name") ? root.get("Name").getAsString() : "";
+                String id = group + ":" + name;
+                if (!id.equals(":") && !seenPluginIds.add(id)) {
+                    excludedJars.add(jar);
+                    warnings.add("Skipping duplicate plugin " + id + " from " + jar);
+                    continue;
+                }
+
+                if (hasMainClass(root)) {
+                    jarsWithMainClass.add(jar);
+                }
+
+                List<String> found = extractMixinConfigs(root);
+
+                for (String cfg : found) {
+                    if (cfg == null) continue;
+                    String normalized = normalizeConfigPath(cfg);
+                    if (normalized.isEmpty()) continue;
+
+                    configs.add(normalized);
+                    origins.putIfAbsent(normalized, jar);
+                }
+            } catch (Exception e) {
+                warnings.add("Failed to read " + jar.getFileName() + ": "
+                        + e.getClass().getSimpleName()
+                        + (e.getMessage() != null ? (": " + e.getMessage()) : ""));
             }
         }
 
@@ -77,7 +93,8 @@ public final class ConfigCollector {
                 List.copyOf(configs),
                 Collections.unmodifiableMap(origins),
                 Collections.unmodifiableSet(jarsWithMainClass),
-                List.copyOf(warnings));
+                List.copyOf(warnings),
+                Set.copyOf(excludedJars));
     }
 
     private static List<Path> listJars(Path dir) {
@@ -135,13 +152,16 @@ public final class ConfigCollector {
         private final Map<String, Path> origins;
         private final Set<Path> jarsWithMainClass;
         private final List<String> warnings;
+        private final Set<Path> excludedJars;
 
         public Result(
-                List<String> configs, Map<String, Path> origins, Set<Path> jarsWithMainClass, List<String> warnings) {
+                List<String> configs, Map<String, Path> origins, Set<Path> jarsWithMainClass,
+                List<String> warnings, Set<Path> excludedJars) {
             this.configs = Objects.requireNonNull(configs, "configs");
             this.origins = Objects.requireNonNull(origins, "origins");
             this.jarsWithMainClass = Objects.requireNonNull(jarsWithMainClass, "jarsWithMainClass");
             this.warnings = Objects.requireNonNull(warnings, "warnings");
+            this.excludedJars = Objects.requireNonNull(excludedJars, "excludedJars");
         }
 
         public List<String> configs() {
@@ -158,6 +178,10 @@ public final class ConfigCollector {
 
         public List<String> warnings() {
             return warnings;
+        }
+
+        public Set<Path> excludedJars() {
+            return excludedJars;
         }
     }
 }
