@@ -17,6 +17,10 @@ java -Xms10G -Xmx10G -jar Hyinit-X.X.X.jar --assets=../Assets.zip
 ````
 Now, you can install mod JARs that depend on Hyinit Mixin environment in the earlyplugins folder.
 
+Hyinit finds `HytaleServer.jar` automatically next to itself or in the working directory.
+To point at a specific server jar, pass `--server-jar=<path>`.
+To load early plugins from extra directories, pass `--early-plugins=<dir1,dir2>`.
+
 ## Developer Guide
 ### Dependencies
 Hyinit currently does not have its own API, so you should depend directly on
