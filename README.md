@@ -1,3 +1,5 @@
+[**Support Discord Server**](https://discord.gg/y5kTgtQtgX)
+
 # Hyinit
 A restriction-free Mixin bootstrapper for HytaleServer.
 Backwards compatible with [Hyxin](https://www.curseforge.com/hytale/mods/hyxin).
