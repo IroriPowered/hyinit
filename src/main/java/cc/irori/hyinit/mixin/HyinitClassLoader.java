@@ -442,7 +442,8 @@ public class HyinitClassLoader extends SecureClassLoader {
             "com.google.gson.",
             "com.google.flogger.",
             "org.bouncycastle.",
-            "com.hypixel.hytale.plugin.early.");
+            "com.hypixel.hytale.plugin.early.ClassTransformer",
+            "com.hypixel.hytale.plugin.early.TransformingClassLoader");
 
     private static boolean canTransformClass(String name) {
         for (String prefix : TRANSFORM_EXCLUSIONS) {

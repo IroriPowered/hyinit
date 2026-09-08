@@ -31,8 +31,18 @@ repositories {
     maven("https://maven.hytale.com/pre-release")
 }
 
+val localHytaleServerJar = (findProperty("hytaleServerJar") as String?)?.trim().orEmpty()
+
 dependencies {
-    compileOnly(libs.hytale)
+    if (localHytaleServerJar.isNotEmpty()) {
+        val localJar = file(localHytaleServerJar)
+        if (!localJar.isFile) {
+            throw GradleException("hytaleServerJar does not exist: ${localJar.absolutePath}")
+        }
+        compileOnly(files(localJar))
+    } else {
+        compileOnly(libs.hytale)
+    }
 
     implementation(libs.mixin)
     implementation(libs.mixinextras)
