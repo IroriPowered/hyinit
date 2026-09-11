@@ -2,7 +2,6 @@ package cc.irori.hyinit;
 
 import cc.irori.hyinit.mixin.HyinitClassLoader;
 import cc.irori.hyinit.mixin.HyinitMixinBootstrap;
-import cc.irori.hyinit.mixin.HyinitMixinConfigSource;
 import cc.irori.hyinit.mixin.HyinitMixinService;
 import cc.irori.hyinit.shared.SourceMetadata;
 import cc.irori.hyinit.util.SneakyThrow;
@@ -22,8 +21,12 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import org.spongepowered.asm.launch.MixinBootstrap;
+import org.spongepowered.asm.mixin.FabricUtil;
 import org.spongepowered.asm.mixin.MixinEnvironment;
 import org.spongepowered.asm.mixin.Mixins;
+import org.spongepowered.asm.mixin.extensibility.IMixinConfig;
+import org.spongepowered.asm.mixin.extensibility.IMixinConfigSource;
+import org.spongepowered.asm.mixin.transformer.Config;
 
 public final class Main {
 
@@ -42,15 +45,12 @@ public final class Main {
 
         System.out.println("Using server jar: " + serverJar);
 
+        Path selfJar = Paths.get(
+                Main.class.getProtectionDomain().getCodeSource().getLocation().toURI());
+
         HyinitClassLoader classLoader = new HyinitClassLoader();
         classLoader.addCodeSource(serverJar, new SourceMetadata(false));
-        classLoader.addCodeSource(
-                Paths.get(Main.class
-                        .getProtectionDomain()
-                        .getCodeSource()
-                        .getLocation()
-                        .toURI()),
-                new SourceMetadata(false));
+        classLoader.addCodeSource(selfJar, new SourceMetadata(false));
 
         Set<Path> earlyPluginDirsSet = new LinkedHashSet<>();
         addEarlyPluginDirectory(earlyPluginDirsSet, cwd.resolve("earlyplugins"));
@@ -97,7 +97,7 @@ public final class Main {
 
         for (String config : configs) {
             try {
-                Mixins.addConfiguration(config, HyinitMixinConfigSource.fromOrigin(result.origins().get(config)));
+                addConfiguration(config, result.origins().get(config));
             } catch (Throwable t) {
                 throw new RuntimeException(
                         String.format(
@@ -107,7 +107,9 @@ public final class Main {
             }
         }
 
-        Mixins.addConfiguration("_hyinit.mixins.json", new HyinitMixinConfigSource("hyinit", "Hyinit"));
+        addConfiguration("_hyinit.mixins.json", selfJar);
+
+        HyinitClassLoader.setMixinConfigs(Mixins.getConfigs());
 
         finishMixinBootstrapping();
 
@@ -131,6 +133,33 @@ public final class Main {
     private static void addEarlyPluginDirectory(Set<Path> directories, Path directory) throws IOException {
         if (Files.isDirectory(directory)) {
             directories.add(directory.toRealPath());
+        }
+    }
+
+    private static void addConfiguration(String config, Path origin) {
+        String name = origin != null ? origin.getFileName().toString() : "Hyinit";
+        Mixins.addConfiguration(config, new MixinConfigSource(name));
+        for (Config registered : Mixins.getConfigs()) {
+            if (!registered.getName().equals(config)) {
+                continue;
+            }
+            IMixinConfig mixinConfig = registered.getConfig();
+            if (!mixinConfig.hasDecoration(FabricUtil.KEY_MOD_ID)) {
+                mixinConfig.decorate(FabricUtil.KEY_MOD_ID, name);
+            }
+        }
+    }
+
+    private record MixinConfigSource(String name) implements IMixinConfigSource {
+
+        @Override
+        public String getId() {
+            return name;
+        }
+
+        @Override
+        public String getDescription() {
+            return name;
         }
     }
 

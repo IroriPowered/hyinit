@@ -24,16 +24,20 @@ import java.nio.file.Path;
 import java.security.CodeSource;
 import java.security.SecureClassLoader;
 import java.security.cert.Certificate;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.Enumeration;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.jar.Manifest;
-import cc.irori.hyinit.MixinConfigOrigins;
 import org.spongepowered.asm.mixin.MixinEnvironment;
+import org.spongepowered.asm.mixin.extensibility.IMixinConfig;
+import org.spongepowered.asm.mixin.extensibility.IMixinConfigSource;
+import org.spongepowered.asm.mixin.transformer.Config;
 import org.spongepowered.asm.mixin.transformer.IMixinTransformer;
 
 public class HyinitClassLoader extends SecureClassLoader {
@@ -41,6 +45,8 @@ public class HyinitClassLoader extends SecureClassLoader {
     private static final boolean DEBUG = System.getProperty("hyinit.debugClassLoader") != null;
 
     private static final ClassLoader PLATFORM_CLASS_LOADER = getPlatformClassLoader();
+
+    private static volatile List<Config> mixinConfigs = List.of();
 
     static {
         registerAsParallelCapable();
@@ -67,6 +73,10 @@ public class HyinitClassLoader extends SecureClassLoader {
         }
 
         transformer = HyinitMixinService.getTransformer();
+    }
+
+    public static void setMixinConfigs(Collection<Config> configs) {
+        mixinConfigs = List.copyOf(configs);
     }
 
     public boolean isTransformerInitialized() {
@@ -330,7 +340,7 @@ public class HyinitClassLoader extends SecureClassLoader {
                 return transformer.transformClassBytes(name, name, original);
             } catch (Throwable t) {
                 String message = String.format("Mixin transformation of %s failed", name);
-                String origin = describeMixinOrigin(t);
+                String origin = describeMixinOrigin(name);
                 if (origin != null) {
                     message = message + " (applied by " + origin + ")";
                 }
@@ -450,29 +460,18 @@ public class HyinitClassLoader extends SecureClassLoader {
             "com.hypixel.hytale.plugin.early.ClassTransformer",
             "com.hypixel.hytale.plugin.early.TransformingClassLoader");
 
-    private static String describeMixinOrigin(Throwable error) {
+    private static String describeMixinOrigin(String name) {
         StringBuilder origins = new StringBuilder();
-        java.util.Set<String> seen = new java.util.LinkedHashSet<>();
-        for (Throwable t = error; t != null; t = t.getCause()) {
-            String message = t.getMessage();
-            if (message == null) {
+        for (Config registered : mixinConfigs) {
+            IMixinConfig config = registered.getConfig();
+            if (!config.getTargets().contains(name)) {
                 continue;
             }
-            java.util.regex.Matcher matcher =
-                    java.util.regex.Pattern.compile("([\\w.-]+\\.mixins\\.json):([\\w.$]+)").matcher(message);
-            while (matcher.find()) {
-                String config = matcher.group(1);
-                String mixin = matcher.group(2);
-                Path origin = MixinConfigOrigins.originOf(config);
-                String label = origin != null ? origin.getFileName().toString() : config;
-                String entry = label + " (" + config + ":" + mixin + ")";
-                if (seen.add(entry)) {
-                    if (origins.length() > 0) {
-                        origins.append(", ");
-                    }
-                    origins.append(entry);
-                }
+            IMixinConfigSource source = config.getSource();
+            if (origins.length() > 0) {
+                origins.append(", ");
             }
+            origins.append(source != null ? source.getDescription() : config.getName());
         }
         return origins.length() == 0 ? null : origins.toString();
     }
