@@ -89,9 +89,11 @@ public final class ConfigCollector {
             }
         }
 
+        Map<String, Path> frozenOrigins = Collections.unmodifiableMap(origins);
+        MixinConfigOrigins.set(frozenOrigins);
         return new Result(
                 List.copyOf(configs),
-                Collections.unmodifiableMap(origins),
+                frozenOrigins,
                 Collections.unmodifiableSet(jarsWithMainClass),
                 List.copyOf(warnings),
                 Set.copyOf(excludedJars));

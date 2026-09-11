@@ -32,6 +32,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.jar.Manifest;
+import cc.irori.hyinit.MixinConfigOrigins;
 import org.spongepowered.asm.mixin.MixinEnvironment;
 import org.spongepowered.asm.mixin.transformer.IMixinTransformer;
 
@@ -329,6 +330,10 @@ public class HyinitClassLoader extends SecureClassLoader {
                 return transformer.transformClassBytes(name, name, original);
             } catch (Throwable t) {
                 String message = String.format("Mixin transformation of %s failed", name);
+                String origin = describeMixinOrigin(t);
+                if (origin != null) {
+                    message = message + " (applied by " + origin + ")";
+                }
                 HyinitLogger.get().error(message, t);
                 throw new RuntimeException(message, t);
             }
@@ -444,6 +449,33 @@ public class HyinitClassLoader extends SecureClassLoader {
             "org.bouncycastle.",
             "com.hypixel.hytale.plugin.early.ClassTransformer",
             "com.hypixel.hytale.plugin.early.TransformingClassLoader");
+
+    private static String describeMixinOrigin(Throwable error) {
+        StringBuilder origins = new StringBuilder();
+        java.util.Set<String> seen = new java.util.LinkedHashSet<>();
+        for (Throwable t = error; t != null; t = t.getCause()) {
+            String message = t.getMessage();
+            if (message == null) {
+                continue;
+            }
+            java.util.regex.Matcher matcher =
+                    java.util.regex.Pattern.compile("([\\w.-]+\\.mixins\\.json):([\\w.$]+)").matcher(message);
+            while (matcher.find()) {
+                String config = matcher.group(1);
+                String mixin = matcher.group(2);
+                Path origin = MixinConfigOrigins.originOf(config);
+                String label = origin != null ? origin.getFileName().toString() : config;
+                String entry = label + " (" + config + ":" + mixin + ")";
+                if (seen.add(entry)) {
+                    if (origins.length() > 0) {
+                        origins.append(", ");
+                    }
+                    origins.append(entry);
+                }
+            }
+        }
+        return origins.length() == 0 ? null : origins.toString();
+    }
 
     private static boolean canTransformClass(String name) {
         for (String prefix : TRANSFORM_EXCLUSIONS) {

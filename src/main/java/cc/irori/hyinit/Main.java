@@ -2,6 +2,7 @@ package cc.irori.hyinit;
 
 import cc.irori.hyinit.mixin.HyinitClassLoader;
 import cc.irori.hyinit.mixin.HyinitMixinBootstrap;
+import cc.irori.hyinit.mixin.HyinitMixinConfigSource;
 import cc.irori.hyinit.mixin.HyinitMixinService;
 import cc.irori.hyinit.shared.SourceMetadata;
 import cc.irori.hyinit.util.SneakyThrow;
@@ -96,7 +97,7 @@ public final class Main {
 
         for (String config : configs) {
             try {
-                Mixins.addConfiguration(config);
+                Mixins.addConfiguration(config, HyinitMixinConfigSource.fromOrigin(result.origins().get(config)));
             } catch (Throwable t) {
                 throw new RuntimeException(
                         String.format(
@@ -106,7 +107,7 @@ public final class Main {
             }
         }
 
-        Mixins.addConfiguration("_hyinit.mixins.json");
+        Mixins.addConfiguration("_hyinit.mixins.json", new HyinitMixinConfigSource("hyinit", "Hyinit"));
 
         finishMixinBootstrapping();
 
