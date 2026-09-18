@@ -155,8 +155,11 @@ public final class ConfigCollector {
         private final Set<Path> excludedJars;
 
         public Result(
-                List<String> configs, Map<String, Path> origins, Set<Path> jarsWithMainClass,
-                List<String> warnings, Set<Path> excludedJars) {
+                List<String> configs,
+                Map<String, Path> origins,
+                Set<Path> jarsWithMainClass,
+                List<String> warnings,
+                Set<Path> excludedJars) {
             this.configs = Objects.requireNonNull(configs, "configs");
             this.origins = Objects.requireNonNull(origins, "origins");
             this.jarsWithMainClass = Objects.requireNonNull(jarsWithMainClass, "jarsWithMainClass");

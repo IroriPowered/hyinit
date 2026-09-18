@@ -49,6 +49,12 @@ dependencies {
     implementation(libs.asm.tree)
     implementation(libs.guava)
     implementation(libs.gson)
+
+    constraints {
+        implementation(libs.asm.analysis)
+        implementation(libs.asm.commons)
+        implementation(libs.asm.util)
+    }
 }
 
 base {
