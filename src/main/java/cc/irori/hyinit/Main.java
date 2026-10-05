@@ -49,7 +49,7 @@ public final class Main {
         classLoader.addCodeSource(selfJar, new SourceMetadata(false));
 
         Set<Path> earlyPluginDirsSet = new LinkedHashSet<>();
-        addEarlyPluginDirectory(earlyPluginDirsSet, cwd.resolve("earlyplugins"));
+        Path defaultEarlyPluginDir = addEarlyPluginDirectory(earlyPluginDirsSet, cwd.resolve("earlyplugins"));
         Path selfDir = ServerJarLocator.getSelfDirectory();
         if (selfDir != null) {
             addEarlyPluginDirectory(earlyPluginDirsSet, selfDir.resolve("earlyplugins"));
@@ -58,7 +58,6 @@ public final class Main {
             addEarlyPluginDirectory(earlyPluginDirsSet, p);
         }
         List<Path> earlyPluginDirs = new ArrayList<>(earlyPluginDirsSet);
-        final String[] serverArgs = ServerJarLocator.buildServerArgs(args, earlyPluginDirs);
 
         ConfigCollector.Result result = ConfigCollector.collectMixinConfigs(cwd, earlyPluginDirs);
         result.warnings().forEach(LOGGER::warn);
@@ -73,6 +72,11 @@ public final class Main {
                 }
             }
         }
+
+        if (defaultEarlyPluginDir != null) {
+            earlyPluginDirs.remove(defaultEarlyPluginDir);
+        }
+        final String[] serverArgs = ServerJarLocator.buildServerArgs(args, earlyPluginDirs);
 
         HyinitMixinService.setGameClassLoader(classLoader);
 
@@ -127,10 +131,13 @@ public final class Main {
         thread.start();
     }
 
-    private static void addEarlyPluginDirectory(Set<Path> directories, Path directory) throws IOException {
+    private static Path addEarlyPluginDirectory(Set<Path> directories, Path directory) throws IOException {
         if (Files.isDirectory(directory)) {
-            directories.add(directory.toRealPath());
+            Path canonicalDirectory = directory.toRealPath();
+            directories.add(canonicalDirectory);
+            return canonicalDirectory;
         }
+        return null;
     }
 
     private static void addConfiguration(String config, Path origin) {

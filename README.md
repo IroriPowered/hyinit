@@ -19,10 +19,10 @@ java -Xms10G -Xmx10G -jar Hyinit-X.X.X.jar --assets=../Assets.zip
 ````
 Now, you can install mod JARs that depend on Hyinit Mixin environment in the earlyplugins folder.
 
-Hyinit finds `HytaleServer.jar` automatically next to itself or in the working directory.
+Hyinit finds the real server JAR automatically in the working directory or next to itself. For launchers that require `HytaleServer.jar`, use that filename for Hyinit and keep the real server beside it under another `.jar` filename; no additional bootstrap arguments are needed.
 To point at a specific server jar, pass `--server-jar=<path>`.
 To load early plugins from extra directories, pass `--early-plugins=<dir1,dir2>`.
-Hyinit shares the `earlyplugins` directories in the working directory and next to its JAR, plus these extra directories, with Hytale's native early-plugin transformer discovery.
+Hyinit scans `earlyplugins` in the working directory and next to its JAR, plus these extra directories, for Mixins. Hytale already scans the working-directory folder, so Hyinit forwards only the other resolved directories for native early-plugin discovery, avoiding duplicate scans of the same directory.
 For eligible server classes, native transformations run before Mixins using the same classloader.
 
 ## Developer Guide
