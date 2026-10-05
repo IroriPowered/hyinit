@@ -39,10 +39,6 @@ public final class Main {
 
         Path serverJar = ServerJarLocator.locate(args);
 
-        // Remove args used by hyinit so we don't pass them to the server
-        // causing a "UnrecognizedOptionException"
-        final String[] serverArgs = ServerJarLocator.stripArgs(args);
-
         System.out.println("Using server jar: " + serverJar);
 
         Path selfJar = Paths.get(
@@ -62,6 +58,7 @@ public final class Main {
             addEarlyPluginDirectory(earlyPluginDirsSet, p);
         }
         List<Path> earlyPluginDirs = new ArrayList<>(earlyPluginDirsSet);
+        final String[] serverArgs = ServerJarLocator.buildServerArgs(args, earlyPluginDirs);
 
         ConfigCollector.Result result = ConfigCollector.collectMixinConfigs(cwd, earlyPluginDirs);
         result.warnings().forEach(LOGGER::warn);

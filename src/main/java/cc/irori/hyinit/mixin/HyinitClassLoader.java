@@ -1,6 +1,7 @@
 package cc.irori.hyinit.mixin;
 
 import cc.irori.hyinit.HyinitLogger;
+import cc.irori.hyinit.shared.NativeClassDefiner;
 import cc.irori.hyinit.shared.SourceMetaStore;
 import cc.irori.hyinit.shared.SourceMetadata;
 import cc.irori.hyinit.util.LoaderUtil;
@@ -33,6 +34,8 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.jar.Manifest;
 import org.spongepowered.asm.mixin.MixinEnvironment;
 import org.spongepowered.asm.mixin.extensibility.IMixinConfig;
@@ -57,9 +60,12 @@ public class HyinitClassLoader extends SecureClassLoader {
 
     private final Map<Path, Metadata> metadataCache = new ConcurrentHashMap<>();
     private final Set<String> parentSourcedClasses = Collections.newSetFromMap(new ConcurrentHashMap<>());
+    private final ReentrantReadWriteLock transformationGate = new ReentrantReadWriteLock(true);
 
     private IMixinTransformer transformer = null;
     private volatile Set<Path> codeSources = Collections.emptySet();
+    private volatile NativeClassDefiner nativeClassDefiner;
+    private Path nativeCodeSource;
 
     public HyinitClassLoader() {
         super("Hyinit", new EmptyURLClassLoader(new URL[0]));
@@ -73,6 +79,21 @@ public class HyinitClassLoader extends SecureClassLoader {
         }
 
         transformer = HyinitMixinService.getTransformer();
+    }
+
+    public void setNativeClassDefiner(NativeClassDefiner definer, CodeSource source) {
+        Lock lock = transformationGate.writeLock();
+        lock.lock();
+        try {
+            nativeCodeSource = LoaderUtil.normalizeExistingPath(UrlUtil.asPath(source.getLocation()));
+            nativeClassDefiner = definer;
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    public boolean isNativeClassDefiner(NativeClassDefiner definer) {
+        return nativeClassDefiner == definer;
     }
 
     public static void setMixinConfigs(Collection<Config> configs) {
@@ -156,6 +177,21 @@ public class HyinitClassLoader extends SecureClassLoader {
 
     @Override
     protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
+        Lock lock = nativeClassDefiner == null ? transformationGate.readLock() : transformationGate.writeLock();
+        lock.lock();
+        if (lock == transformationGate.readLock() && nativeClassDefiner != null) {
+            lock.unlock();
+            lock = transformationGate.writeLock();
+            lock.lock();
+        }
+        try {
+            return loadClassUnderGate(name, resolve);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    private Class<?> loadClassUnderGate(String name, boolean resolve) throws ClassNotFoundException {
         synchronized (getClassLoadingLock(name)) {
             Class<?> c = findLoadedClass(name);
 
@@ -168,7 +204,7 @@ public class HyinitClassLoader extends SecureClassLoader {
                 } else if (isParentDelegated(name)) {
                     c = originalLoader.loadClass(name);
                 } else {
-                    c = tryLoadClass(name, false);
+                    c = tryLoadClass(name);
 
                     if (c == null) {
                         String fileName = LoaderUtil.getClassFileName(name);
@@ -204,33 +240,57 @@ public class HyinitClassLoader extends SecureClassLoader {
         }
     }
 
-    private Class<?> tryLoadClass(String name, boolean allowFromParent) throws ClassNotFoundException {
-        if (!allowFromParent && !parentSourcedClasses.isEmpty()) {
-            int pos = name.length();
+    private Class<?> tryLoadClass(String name) throws ClassNotFoundException {
+        boolean parentSourced = isParentSourcedClass(name);
+        URL source = getClassResource(name, parentSourced);
+        byte[] input = getPreMixinClassByteArray(name, source);
 
-            while ((pos = name.lastIndexOf('$', pos - 1)) > 0) {
-                if (parentSourcedClasses.contains(name.substring(0, pos))) {
-                    allowFromParent = true;
-                    break;
-                }
-            }
+        NativeClassDefiner definer = nativeClassDefiner;
+        if (input != null
+                && definer != null
+                && definer.canTransformClass(name)
+                && hasRegularCodeSource(source)
+                && nativeCodeSource.equals(getCodeSource(source, LoaderUtil.getClassFileName(name)))) {
+            return definer.transformAndDefineClass(name, input, source);
         }
 
-        byte[] input = getPostMixinClassByteArray(name, allowFromParent);
+        input = getPostMixinClassByteArray(name, input);
         if (input == null) {
             return null;
         }
+        return defineClassBytes(name, input, null);
+    }
 
+    public Class<?> defineClassAfterNativeTransform(String name, byte[] bytes, CodeSource source)
+            throws ClassNotFoundException {
+        return defineClassBytes(name, getPostMixinClassByteArray(name, bytes), source);
+    }
+
+    private boolean isParentSourcedClass(String name) {
+        if (!parentSourcedClasses.isEmpty()) {
+            int pos = name.length();
+            while ((pos = name.lastIndexOf('$', pos - 1)) > 0) {
+                if (parentSourcedClasses.contains(name.substring(0, pos))) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private Class<?> defineClassBytes(String name, byte[] input, CodeSource source) throws ClassNotFoundException {
         Class<?> existingClass = findLoadedClass(name);
         if (existingClass != null) {
             return existingClass;
         }
 
-        if (allowFromParent) {
+        if (isParentSourcedClass(name)) {
             parentSourcedClasses.add(name);
         }
 
-        Metadata metadata = getMetadata(name);
+        if (source == null) {
+            source = getMetadata(name).codeSource;
+        }
         int packageDelimiterPos = name.lastIndexOf('.');
 
         if (packageDelimiterPos > 0) {
@@ -247,7 +307,7 @@ public class HyinitClassLoader extends SecureClassLoader {
         }
 
         try {
-            return defineClass(name, input, 0, input.length, metadata.codeSource);
+            return defineClass(name, input, 0, input.length, source);
         } catch (NoClassDefFoundError e) {
             throw new ClassNotFoundException(name, e);
         }
@@ -284,7 +344,7 @@ public class HyinitClassLoader extends SecureClassLoader {
         return getRawClassByteArray(name, true);
     }
 
-    private byte[] getRawClassByteArray(String name, boolean allowFromParent) throws IOException {
+    private URL getClassResource(String name, boolean allowFromParent) {
         name = LoaderUtil.getClassFileName(name);
         URL url = findResource(name);
 
@@ -298,6 +358,17 @@ public class HyinitClassLoader extends SecureClassLoader {
             if (!isValidParentUrl(url, name)) {
                 return null;
             }
+        }
+        return url;
+    }
+
+    private byte[] getRawClassByteArray(String name, boolean allowFromParent) throws IOException {
+        return readClassBytes(getClassResource(name, allowFromParent));
+    }
+
+    private byte[] readClassBytes(URL url) throws IOException {
+        if (url == null) {
+            return null;
         }
 
         try (InputStream inputStream = url.openStream()) {
@@ -320,17 +391,18 @@ public class HyinitClassLoader extends SecureClassLoader {
 
     private byte[] getPreMixinClassByteArray(String name, boolean allowFromParent) {
         name = name.replace('/', '.');
+        return getPreMixinClassByteArray(name, getClassResource(name, allowFromParent));
+    }
 
+    private byte[] getPreMixinClassByteArray(String name, URL source) {
         try {
-            return getRawClassByteArray(name, allowFromParent);
+            return readClassBytes(source);
         } catch (IOException e) {
             throw new RuntimeException("Failed to load class file for '" + name + "'", e);
         }
     }
 
-    private byte[] getPostMixinClassByteArray(String name, boolean allowFromParent) {
-        byte[] original = getPreMixinClassByteArray(name, allowFromParent);
-
+    private byte[] getPostMixinClassByteArray(String name, byte[] original) {
         if (!isTransformerInitialized() || !canTransformClass(name)) {
             return original;
         }
@@ -457,8 +529,7 @@ public class HyinitClassLoader extends SecureClassLoader {
             "com.google.gson.",
             "com.google.flogger.",
             "org.bouncycastle.",
-            "com.hypixel.hytale.plugin.early.ClassTransformer",
-            "com.hypixel.hytale.plugin.early.TransformingClassLoader");
+            "com.hypixel.hytale.plugin.early.ClassTransformer");
 
     private static String describeMixinOrigin(String name) {
         StringBuilder origins = new StringBuilder();

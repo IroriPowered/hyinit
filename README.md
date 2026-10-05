@@ -22,6 +22,8 @@ Now, you can install mod JARs that depend on Hyinit Mixin environment in the ear
 Hyinit finds `HytaleServer.jar` automatically next to itself or in the working directory.
 To point at a specific server jar, pass `--server-jar=<path>`.
 To load early plugins from extra directories, pass `--early-plugins=<dir1,dir2>`.
+Hyinit shares the `earlyplugins` directories in the working directory and next to its JAR, plus these extra directories, with Hytale's native early-plugin transformer discovery.
+For eligible server classes, native transformations run before Mixins using the same classloader.
 
 ## Developer Guide
 ### Dependencies
