@@ -1,7 +1,7 @@
 [versions]
 spotless = "8.10.2"
 shadow = "9.6.1"
-hytale = "0.6.7"
+hytale = "0.7.2"
 mixin = "0.17.4+mixin.0.8.7"
 mixinextras = "0.5.5"
 asm = "9.10.1"
