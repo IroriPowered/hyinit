@@ -1,11 +1,11 @@
 [versions]
-spotless = "8.10.2"
+spotless = "8.10.4"
 shadow = "9.6.1"
 hytale = "0.7.2"
-mixin = "0.17.4+mixin.0.8.7"
+mixin = "0.17.5+mixin.0.8.7"
 mixinextras = "0.5.5"
 asm = "9.10.1"
-guava = "33.7.1-jre"
+guava = "33.7.2-jre"
 gson = "2.14.0"
 
 [libraries]
