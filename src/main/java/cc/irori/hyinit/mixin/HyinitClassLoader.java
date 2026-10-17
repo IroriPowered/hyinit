@@ -258,7 +258,10 @@ public class HyinitClassLoader extends SecureClassLoader {
         if (input == null) {
             return null;
         }
-        return defineClassBytes(name, input, null);
+        CodeSource codeSource = source != null && hasRegularCodeSource(source)
+                ? getMetadata(getCodeSource(source, LoaderUtil.getClassFileName(name))).codeSource
+                : null;
+        return defineClassBytes(name, input, codeSource);
     }
 
     public Class<?> defineClassAfterNativeTransform(String name, byte[] bytes, CodeSource source)

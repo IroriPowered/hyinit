@@ -4,12 +4,14 @@ import cc.irori.hyinit.HyinitLogger;
 import cc.irori.hyinit.shared.SourceMetaStore;
 import cc.irori.hyinit.shared.SourceMetadata;
 import cc.irori.hyinit.util.LoaderUtil;
-import cc.irori.hyinit.util.UrlUtil;
 import com.hypixel.hytale.server.core.plugin.PluginClassLoader;
 import com.llamalad7.mixinextras.sugar.Local;
 import java.io.IOException;
+import java.net.URISyntaxException;
 import java.net.URL;
 import java.net.URLClassLoader;
+import java.nio.file.FileSystemNotFoundException;
+import java.nio.file.Path;
 import java.security.CodeSource;
 import java.util.Collections;
 import java.util.Enumeration;
@@ -45,21 +47,26 @@ public class MixinPluginClassLoader extends URLClassLoader {
             @Local(ordinal = 0) Class<?> loadClass)
             throws ClassNotFoundException {
         if (loadClass == null) return;
+        CodeSource codeSource = loadClass.getProtectionDomain().getCodeSource();
+        if (codeSource == null || codeSource.getLocation() == null) return;
+        Path sourcePath;
+        try {
+            sourcePath = Path.of(codeSource.getLocation().toURI());
+        } catch (URISyntaxException | IllegalArgumentException | FileSystemNotFoundException ignored) {
+            return;
+        }
+        SourceMetadata meta = SourceMetaStore.get(sourcePath);
+        if (meta == null || !meta.isEarlyPlugin()) return;
+
         String fileName = LoaderUtil.getClassFileName(name);
         URL url = super.getResource(fileName);
         if (url != null) {
-            CodeSource codeSource = loadClass.getProtectionDomain().getCodeSource();
-            if (codeSource != null) {
-                SourceMetadata meta = SourceMetaStore.get(UrlUtil.asPath(codeSource.getLocation()));
-                if (meta.isEarlyPlugin()) {
-                    try {
-                        Class<?> pluginClass = super.loadClass(name, false);
-                        if (pluginClass != null) {
-                            cir.setReturnValue(pluginClass);
-                        }
-                    } catch (ClassNotFoundException ignored) {
-                    }
+            try {
+                Class<?> pluginClass = super.loadClass(name, false);
+                if (pluginClass != null) {
+                    cir.setReturnValue(pluginClass);
                 }
+            } catch (ClassNotFoundException ignored) {
             }
         }
     }
