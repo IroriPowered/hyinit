@@ -68,7 +68,10 @@ public final class Main {
                 Path normalized = path.toRealPath();
                 if (addedJars.add(normalized) && !result.excludedJars().contains(normalized)) {
                     boolean hasMain = result.jarsWithMainClass().contains(normalized);
-                    classLoader.addCodeSource(normalized, new SourceMetadata(true, hasMain));
+                    classLoader.addCodeSource(
+                            normalized,
+                            new SourceMetadata(
+                                    true, hasMain, result.sharedPackages().getOrDefault(normalized, Set.of())));
                 }
             }
         }

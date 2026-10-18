@@ -336,7 +336,7 @@ public class HyinitClassLoader extends SecureClassLoader {
                     return generated;
                 }
             } catch (Throwable t) {
-                // Not a synthetic class — fall through
+                // Not a synthetic class. Fall through.
             }
         }
 

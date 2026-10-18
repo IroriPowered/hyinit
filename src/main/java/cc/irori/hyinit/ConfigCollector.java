@@ -18,6 +18,7 @@ import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
+import javax.lang.model.SourceVersion;
 
 public final class ConfigCollector {
 
@@ -36,6 +37,7 @@ public final class ConfigCollector {
         Map<String, Path> origins = new LinkedHashMap<>();
         LinkedHashSet<String> configs = new LinkedHashSet<>();
         Set<Path> jarsWithMainClass = new LinkedHashSet<>();
+        Map<Path, Set<String>> sharedPackages = new LinkedHashMap<>();
         Set<Path> excludedJars = new HashSet<>();
         Set<String> seenPluginIds = new HashSet<>();
         Set<Path> jars = new TreeSet<>();
@@ -72,6 +74,12 @@ public final class ConfigCollector {
                     jarsWithMainClass.add(jar);
                 }
 
+                try {
+                    sharedPackages.put(jar, extractSharedPackages(root));
+                } catch (IllegalArgumentException e) {
+                    warnings.add("Ignoring HyinitSharedPackages in " + jar.getFileName() + ": " + e.getMessage());
+                }
+
                 List<String> found = extractMixinConfigs(root);
 
                 for (String cfg : found) {
@@ -93,6 +101,7 @@ public final class ConfigCollector {
                 List.copyOf(configs),
                 Collections.unmodifiableMap(origins),
                 Collections.unmodifiableSet(jarsWithMainClass),
+                Map.copyOf(sharedPackages),
                 List.copyOf(warnings),
                 Set.copyOf(excludedJars));
     }
@@ -126,6 +135,22 @@ public final class ConfigCollector {
                 && !root.get("Main").getAsString().isEmpty();
     }
 
+    private static Set<String> extractSharedPackages(JsonObject root) {
+        JsonElement value = root.get("HyinitSharedPackages");
+        if (value == null) return Set.of();
+        if (!value.isJsonArray()) throw new IllegalArgumentException("expected an array of Java package names");
+        Set<String> packages = new LinkedHashSet<>();
+        for (JsonElement entry : value.getAsJsonArray()) {
+            if (!entry.isJsonPrimitive()
+                    || !entry.getAsJsonPrimitive().isString()
+                    || !SourceVersion.isName(entry.getAsString())) {
+                throw new IllegalArgumentException("invalid Java package name: " + entry);
+            }
+            packages.add(entry.getAsString());
+        }
+        return Set.copyOf(packages);
+    }
+
     private static List<String> extractMixinConfigs(JsonObject root) {
         if (root.has("Mixins")) {
             return readStringOrStringArray(root.get("Mixins"));
@@ -151,6 +176,7 @@ public final class ConfigCollector {
         private final List<String> configs;
         private final Map<String, Path> origins;
         private final Set<Path> jarsWithMainClass;
+        private final Map<Path, Set<String>> sharedPackages;
         private final List<String> warnings;
         private final Set<Path> excludedJars;
 
@@ -158,11 +184,13 @@ public final class ConfigCollector {
                 List<String> configs,
                 Map<String, Path> origins,
                 Set<Path> jarsWithMainClass,
+                Map<Path, Set<String>> sharedPackages,
                 List<String> warnings,
                 Set<Path> excludedJars) {
             this.configs = Objects.requireNonNull(configs, "configs");
             this.origins = Objects.requireNonNull(origins, "origins");
             this.jarsWithMainClass = Objects.requireNonNull(jarsWithMainClass, "jarsWithMainClass");
+            this.sharedPackages = Objects.requireNonNull(sharedPackages, "sharedPackages");
             this.warnings = Objects.requireNonNull(warnings, "warnings");
             this.excludedJars = Objects.requireNonNull(excludedJars, "excludedJars");
         }
@@ -177,6 +205,10 @@ public final class ConfigCollector {
 
         public Set<Path> jarsWithMainClass() {
             return jarsWithMainClass;
+        }
+
+        public Map<Path, Set<String>> sharedPackages() {
+            return sharedPackages;
         }
 
         public List<String> warnings() {

@@ -12,6 +12,9 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 public class MixinSemverRange {
 
     @Unique
+    private static boolean hyinit$legacyCompatibilityWarningLogged;
+
+    @Unique
     private static final Pattern LEGACY_VERSION = Pattern.compile("^\\d{4}\\.\\d{2}\\.\\d{2}-[0-9a-f]+$");
 
     @Inject(
@@ -19,8 +22,20 @@ public class MixinSemverRange {
             at = @At("HEAD"),
             cancellable = true)
     private static void hyinit$handleLegacy(String str, boolean strict, CallbackInfoReturnable<SemverRange> cir) {
-        if (str != null && LEGACY_VERSION.matcher(str.trim()).matches()) {
-            cir.setReturnValue(SemverRange.fromString("*"));
+        if (str == null || !LEGACY_VERSION.matcher(str.trim()).matches()) {
+            return;
         }
+        hyinit$warnLegacyCompatibility();
+        cir.setReturnValue(SemverRange.fromString("*"));
+    }
+
+    @Unique
+    private static synchronized void hyinit$warnLegacyCompatibility() {
+        if (hyinit$legacyCompatibilityWarningLogged) {
+            return;
+        }
+        hyinit$legacyCompatibilityWarningLogged = true;
+        System.err.println(
+                "Hyinit warning: legacy date/hash version constraints use '*'. Remove -Dhyinit.compatibility.legacyVersions=true to disable.");
     }
 }

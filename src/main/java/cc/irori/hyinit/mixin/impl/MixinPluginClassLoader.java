@@ -4,18 +4,18 @@ import cc.irori.hyinit.HyinitLogger;
 import cc.irori.hyinit.shared.SourceMetaStore;
 import cc.irori.hyinit.shared.SourceMetadata;
 import cc.irori.hyinit.util.LoaderUtil;
+import cc.irori.hyinit.util.UrlConversionException;
+import cc.irori.hyinit.util.UrlUtil;
 import com.hypixel.hytale.server.core.plugin.PluginClassLoader;
-import com.llamalad7.mixinextras.sugar.Local;
 import java.io.IOException;
-import java.net.URISyntaxException;
+import java.io.UncheckedIOException;
 import java.net.URL;
 import java.net.URLClassLoader;
-import java.nio.file.FileSystemNotFoundException;
 import java.nio.file.Path;
-import java.security.CodeSource;
 import java.util.Collections;
 import java.util.Enumeration;
 import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.Redirect;
@@ -39,48 +39,60 @@ public class MixinPluginClassLoader extends URLClassLoader {
     // OrbisGuard compatibility:
     // When the same class is present in both the earlyplugin jar and the mod jar, prioritize the mod's.
     // To do this, we need to check the SourceMetadata of the loaded class.
-    @Inject(method = "loadClass0", at = @At(value = "RETURN", ordinal = 0), cancellable = true)
-    private void hyinit$prioritizeLocalModClass(
-            String name,
-            boolean useBridge,
-            CallbackInfoReturnable<Class<?>> cir,
-            @Local(ordinal = 0) Class<?> loadClass)
-            throws ClassNotFoundException {
-        if (loadClass == null) return;
-        CodeSource codeSource = loadClass.getProtectionDomain().getCodeSource();
-        if (codeSource == null || codeSource.getLocation() == null) return;
-        Path sourcePath;
-        try {
-            sourcePath = Path.of(codeSource.getLocation().toURI());
-        } catch (URISyntaxException | IllegalArgumentException | FileSystemNotFoundException ignored) {
-            return;
-        }
-        SourceMetadata meta = SourceMetaStore.get(sourcePath);
-        if (meta == null || !meta.isEarlyPlugin()) return;
-
-        String fileName = LoaderUtil.getClassFileName(name);
-        URL url = super.getResource(fileName);
-        if (url != null) {
+    @Redirect(
+            method = "loadClass0",
+            at =
+                    @At(
+                            value = "INVOKE",
+                            target = "Ljava/lang/ClassLoader;loadClass(Ljava/lang/String;)Ljava/lang/Class;"),
+            require = 1)
+    private Class<?> hyinit$resolveParentClass(ClassLoader parent, String name) throws ClassNotFoundException {
+        Class<?> parentClass = parent.loadClass(name);
+        SourceMetaStore.ClassSource source = SourceMetaStore.sourceOf(parentClass);
+        if (source == null || !source.metadata().isEarlyPlugin()) return parentClass;
+        if (super.findResource(LoaderUtil.getClassFileName(name)) != null) {
             try {
-                Class<?> pluginClass = super.loadClass(name, false);
-                if (pluginClass != null) {
-                    cir.setReturnValue(pluginClass);
-                }
+                return super.loadClass(name, false);
             } catch (ClassNotFoundException ignored) {
+                return parentClass;
             }
         }
+        if (source.metadata().declaresSharedPackages() && !source.metadata().sharesClass(name)) {
+            throw new ClassNotFoundException(name);
+        }
+        return parentClass;
     }
 
     @Inject(method = "loadClass0", at = @At("HEAD"), cancellable = true)
     private void hyinit$routeMixinAccessorToHyinit(
             String name, boolean useBridge, CallbackInfoReturnable<Class<?>> cir) {
-        if (name == null || !name.contains(".mixin.")) return;
+        if (name == null) return;
+        ClassLoader owner = HyinitLogger.class.getClassLoader();
+        if (!name.contains(".mixin.") && !hyinit$isSharedPackage(name, owner)) return;
         try {
-            Class<?> hyinitClass = HyinitLogger.class.getClassLoader().loadClass(name);
+            Class<?> hyinitClass = owner.loadClass(name);
             if (hyinitClass != null) {
                 cir.setReturnValue(hyinitClass);
             }
         } catch (ClassNotFoundException ignored) {
+        }
+    }
+
+    @Unique
+    private boolean hyinit$isSharedPackage(String name, ClassLoader owner) {
+        String fileName = LoaderUtil.getClassFileName(name);
+        URL local = super.findResource(fileName);
+        if (local == null) return false;
+        URL early = owner.getResource(fileName);
+        if (early == null) return false;
+        try {
+            Path localSource = LoaderUtil.normalizeExistingPath(UrlUtil.getCodeSource(local, fileName));
+            Path earlySource = LoaderUtil.normalizeExistingPath(UrlUtil.getCodeSource(early, fileName));
+            if (!localSource.equals(earlySource)) return false;
+            SourceMetadata metadata = SourceMetaStore.get(earlySource);
+            return metadata != null && metadata.declaresSharedPackages() && metadata.sharesClass(name);
+        } catch (UrlConversionException | UncheckedIOException | IllegalArgumentException ignored) {
+            return false;
         }
     }
 
