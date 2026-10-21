@@ -8,22 +8,34 @@ import cc.irori.hyinit.util.UrlUtil;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.hypixel.hytale.common.plugin.PluginIdentifier;
+import com.hypixel.hytale.server.core.plugin.PluginClassLoader;
 import com.hypixel.hytale.server.core.plugin.PluginManager;
 import com.hypixel.hytale.server.core.plugin.pending.PendingLoadJavaPlugin;
+import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
+import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
+import com.llamalad7.mixinextras.sugar.Local;
 import java.io.*;
 import java.net.JarURLConnection;
+import java.net.URI;
 import java.net.URL;
 import java.net.URLConnection;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.*;
+import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
+import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Redirect;
 
 @Mixin(PluginManager.class)
 public abstract class MixinPluginManager {
+
+    @Shadow
+    @Final
+    private Map<Path, PluginClassLoader> classLoaders;
 
     @Shadow
     private PendingLoadJavaPlugin loadPendingJavaPlugin(Path path) {
@@ -47,7 +59,7 @@ public abstract class MixinPluginManager {
     }
 
     @Redirect(
-            method = "loadPluginsInClasspath",
+            method = {"loadPluginsInClasspath", "findAndLoadPlugin"},
             at =
                     @At(
                             value = "INVOKE",
@@ -102,5 +114,48 @@ public abstract class MixinPluginManager {
         }
 
         return Collections.enumeration(urls);
+    }
+
+    @WrapOperation(
+            method = "findAndLoadPlugin",
+            at = @At(value = "NEW", target = "com/hypixel/hytale/server/core/plugin/PluginClassLoader", ordinal = 0))
+    private PluginClassLoader hyinit$combinedReloadLoader(
+            PluginManager self,
+            PluginIdentifier identifier,
+            boolean inServerClassPath,
+            URL[] urls,
+            Operation<PluginClassLoader> original,
+            @Local(ordinal = 0) URL manifestUrl)
+            throws IOException {
+        Path source = hyinit$combinedSource(manifestUrl);
+        if (source == null) {
+            return original.call(self, identifier, inServerClassPath, urls);
+        }
+        URL url = UrlUtil.asUrl(source);
+        return this.classLoaders.computeIfAbsent(
+                source, path -> new PluginClassLoader(self, identifier, true, true, url));
+    }
+
+    @WrapOperation(
+            method = "findAndLoadPlugin",
+            at =
+                    @At(
+                            value = "INVOKE",
+                            target = "Ljava/nio/file/Paths;get(Ljava/net/URI;)Ljava/nio/file/Path;",
+                            ordinal = 0))
+    private Path hyinit$combinedReloadPath(URI uri, Operation<Path> original, @Local(ordinal = 0) URL manifestUrl)
+            throws IOException {
+        Path source = hyinit$combinedSource(manifestUrl);
+        return source == null ? original.call(uri) : source;
+    }
+
+    @Unique
+    private static Path hyinit$combinedSource(URL manifestUrl) throws IOException {
+        if (!(manifestUrl.openConnection() instanceof JarURLConnection connection)) {
+            return null;
+        }
+        Path source = UrlUtil.asPath(connection.getJarFileURL());
+        SourceMetadata meta = SourceMetaStore.get(LoaderUtil.normalizeExistingPath(source));
+        return meta != null && meta.isEarlyPlugin() && meta.hasMainClass() ? source : null;
     }
 }
