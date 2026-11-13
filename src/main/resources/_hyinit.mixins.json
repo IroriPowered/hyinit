@@ -2,15 +2,17 @@
     "required": true,
     "minVersion": "0.8",
     "package": "cc.irori.hyinit.mixin.impl",
+    "injectors": {
+        "defaultRequire": 1
+    },
     "mixins": [
         "MixinEarlyPluginLoader",
         "MixinHytaleLogger",
+        "MixinHytaleServer",
         "MixinLateMain",
         "MixinMain",
         "MixinPluginClassLoader",
         "MixinPluginManager",
-        "MixinSemverRange",
         "MixinTransformingClassLoader"
-    ],
-    "plugin": "cc.irori.hyinit.mixin.HyinitMixinPlugin"
+    ]
 }

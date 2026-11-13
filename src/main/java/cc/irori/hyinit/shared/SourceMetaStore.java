@@ -26,8 +26,6 @@ public final class SourceMetaStore {
         }
     };
 
-    public record ClassSource(Path path, SourceMetadata metadata) {}
-
     // Private constructor to prevent instantiation
     private SourceMetaStore() {}
 
@@ -39,10 +37,8 @@ public final class SourceMetaStore {
         return META_MAP.get(path);
     }
 
-    public static ClassSource sourceOf(Class<?> type) {
+    public static SourceMetadata metadataOf(Class<?> type) {
         Path path = CLASS_PATHS.get(type).orElse(null);
-        if (path == null) return null;
-        SourceMetadata metadata = META_MAP.get(path);
-        return metadata == null ? null : new ClassSource(path, metadata);
+        return path == null ? null : META_MAP.get(path);
     }
 }

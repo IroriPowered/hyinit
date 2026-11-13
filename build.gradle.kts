@@ -47,7 +47,6 @@ dependencies {
     implementation(libs.mixin)
     implementation(libs.mixinextras)
     implementation(libs.asm.tree)
-    implementation(libs.guava)
     implementation(libs.gson)
 
     constraints {
@@ -59,6 +58,14 @@ dependencies {
 
 base {
     archivesName.set("Hyinit")
+}
+
+val hytaleServerJar: FileCollection = if (localHytaleServerJar.isNotEmpty()) {
+    files(localHytaleServerJar)
+} else {
+    configurations.detachedConfiguration(project.dependencies.create(libs.hytale.get())).apply {
+        isTransitive = false
+    }
 }
 
 tasks {
@@ -80,15 +87,37 @@ tasks {
     shadowJar {
         archiveClassifier.set("")
         relocate("com.google.gson", "$projectGroup.libs.com.google.gson")
+        exclude(
+            "org/spongepowered/tools/**",
+            "com/llamalad7/mixinextras/ap/**",
+            "com/llamalad7/mixinextras/utils/MixinAPInternals*.class",
+            "META-INF/services/javax.annotation.processing.Processor",
+            "META-INF/services/org.spongepowered.tools.*",
+            "META-INF/services/cpw.mods.*",
+            "com/google/errorprone/**",
+            "META-INF/maven/com.google.errorprone/**")
+        from(listOf("LICENSE", "NOTICE")) {
+            into("META-INF/hyinit")
+        }
+        from("licenses") {
+            into("META-INF/hyinit/licenses")
+        }
     }
 
     build {
-        dependsOn(spotlessApply, shadowJar)
+        dependsOn(spotlessCheck, shadowJar)
     }
 
     jar {
         manifest {
             attributes("Main-Class" to "cc.irori.hyinit.Main")
+        }
+    }
+
+    register("printHytaleServerJar") {
+        inputs.files(hytaleServerJar)
+        doLast {
+            println(hytaleServerJar.singleFile.absolutePath)
         }
     }
 }

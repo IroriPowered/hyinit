@@ -1,0 +1,26 @@
+Hyinit
+Copyright (c) 2026 IroriPowered
+Licensed under the MIT License (see LICENSE).
+
+Parts of Hyinit are derived from Fabric Loader (https://github.com/FabricMC/fabric-loader),
+Copyright 2016 FabricMC, licensed under the Apache License, Version 2.0
+(see licenses/fabric-loader-LICENSE.txt). The derived files below were modified for Hyinit:
+
+  src/main/java/cc/irori/hyinit/mixin/HyinitClassLoader.java        from launch/knot/KnotClassDelegate.java and KnotClassLoader.java
+  src/main/java/cc/irori/hyinit/mixin/EmptyURLClassLoader.java      from launch/knot/KnotClassLoader.java
+  src/main/java/cc/irori/hyinit/mixin/EmptyClassLoader.java         from launch/knot/DummyClassLoader.java
+  src/main/java/cc/irori/hyinit/mixin/HyinitMixinService.java       from launch/knot/MixinServiceKnot.java
+  src/main/java/cc/irori/hyinit/mixin/HyinitMixinBootstrap.java     from launch/knot/MixinServiceKnotBootstrap.java
+  src/main/java/cc/irori/hyinit/util/LoaderUtil.java                from util/LoaderUtil.java
+  src/main/java/cc/irori/hyinit/util/UrlUtil.java                   from util/UrlUtil.java
+  src/main/java/cc/irori/hyinit/util/UrlConversionException.java    from util/UrlConversionException.java
+  src/main/java/cc/irori/hyinit/Main.java                           finishMixinBootstrapping from launch/FabricLauncherBase.java
+
+Paths on the right are relative to src/main/java/net/fabricmc/loader/impl/ in Fabric Loader.
+
+The Hyinit JAR also contains these libraries:
+
+  ASM (https://asm.ow2.io), BSD 3-Clause License, see licenses/asm-LICENSE.txt
+  Gson (https://github.com/google/gson), Apache License, Version 2.0, text in licenses/fabric-loader-LICENSE.txt
+  Mixin, Fabric fork (https://github.com/FabricMC/Mixin), MIT License, see LICENSE.txt in the JAR root
+  MixinExtras (https://github.com/LlamaLad7/MixinExtras), MIT License, see LICENSE_MixinExtras in the JAR root

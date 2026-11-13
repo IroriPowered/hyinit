@@ -9,6 +9,8 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.hypixel.hytale.common.plugin.PluginIdentifier;
+import com.hypixel.hytale.server.core.plugin.JavaPlugin;
+import com.hypixel.hytale.server.core.plugin.PluginBase;
 import com.hypixel.hytale.server.core.plugin.PluginClassLoader;
 import com.hypixel.hytale.server.core.plugin.PluginManager;
 import com.hypixel.hytale.server.core.plugin.pending.PendingLoadJavaPlugin;
@@ -23,6 +25,7 @@ import java.net.URLConnection;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.*;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
@@ -38,6 +41,14 @@ public abstract class MixinPluginManager {
     private Map<Path, PluginClassLoader> classLoaders;
 
     @Shadow
+    @Final
+    private Map<PluginIdentifier, PluginBase> plugins;
+
+    @Shadow
+    @Final
+    private ReentrantReadWriteLock lock;
+
+    @Shadow
     private PendingLoadJavaPlugin loadPendingJavaPlugin(Path path) {
         return null;
     }
@@ -51,6 +62,13 @@ public abstract class MixinPluginManager {
                                     "Lcom/hypixel/hytale/server/core/plugin/PluginManager;loadPendingJavaPlugin(Ljava/nio/file/Path;)Lcom/hypixel/hytale/server/core/plugin/pending/PendingLoadJavaPlugin;"))
     private PendingLoadJavaPlugin hyinit$safeLoadPendingJavaPlugin(PluginManager self, Path path) {
         try {
+            Path source = LoaderUtil.normalizeExistingPath(path);
+            SourceMetadata metadata = SourceMetaStore.get(source);
+            if (metadata != null && metadata.isEarlyPlugin() && metadata.hasMainClass()) {
+                for (Path loadedPath : this.classLoaders.keySet()) {
+                    if (source.equals(LoaderUtil.normalizeExistingPath(loadedPath))) return null;
+                }
+            }
             return this.loadPendingJavaPlugin(path);
         } catch (Exception e) {
             System.err.println("[Hyinit] Failed to load plugin from " + path.getFileName() + ": " + e.getMessage());
@@ -63,7 +81,8 @@ public abstract class MixinPluginManager {
             at =
                     @At(
                             value = "INVOKE",
-                            target = "Ljava/lang/ClassLoader;getResources(Ljava/lang/String;)Ljava/util/Enumeration;"))
+                            target = "Ljava/lang/ClassLoader;getResources(Ljava/lang/String;)Ljava/util/Enumeration;"),
+            require = 2)
     private Enumeration<URL> hyinit$redirectManifestResources(ClassLoader instance, String name) throws IOException {
         // allow server and other classpath plugins through
         Path hyinitJarPath = LoaderUtil.normalizeExistingPath(UrlUtil.asPath(
@@ -117,6 +136,37 @@ public abstract class MixinPluginManager {
     }
 
     @WrapOperation(
+            method = "releasePluginClassLoader",
+            at = @At(value = "INVOKE", target = "Ljava/util/Map;remove(Ljava/lang/Object;)Ljava/lang/Object;"),
+            require = 1,
+            allow = 1)
+    private Object hyinit$releaseUnusedLoaders(
+            Map<?, ?> map, Object path, Operation<Object> original, @Local(argsOnly = true) JavaPlugin plugin) {
+        PluginClassLoader registered = this.classLoaders.get(path);
+        PluginClassLoader own = plugin.getClassLoader();
+        if (own != registered && !hyinit$isLoaderInUse(own, null)) {
+            try {
+                own.close();
+            } catch (IOException e) {
+                HyinitLogger.get().warn("Failed to close plugin classloader for " + path, e);
+            }
+        }
+        return registered == null || hyinit$isLoaderInUse(registered, path) ? null : original.call(map, path);
+    }
+
+    @Unique
+    private boolean hyinit$isLoaderInUse(PluginClassLoader loader, Object registeredPath) {
+        for (PluginBase plugin : this.plugins.values()) {
+            if (plugin instanceof JavaPlugin javaPlugin
+                    && (javaPlugin.getClassLoader() == loader
+                            || (registeredPath != null && registeredPath.equals(javaPlugin.getFile())))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    @WrapOperation(
             method = "findAndLoadPlugin",
             at = @At(value = "NEW", target = "com/hypixel/hytale/server/core/plugin/PluginClassLoader", ordinal = 0))
     private PluginClassLoader hyinit$combinedReloadLoader(
@@ -130,6 +180,21 @@ public abstract class MixinPluginManager {
         Path source = hyinit$combinedSource(manifestUrl);
         if (source == null) {
             return original.call(self, identifier, inServerClassPath, urls);
+        }
+        if (SourceMetaStore.get(LoaderUtil.normalizeExistingPath(source)).mixinsSkipped()) {
+            HyinitLogger.get()
+                    .warn(
+                            "Mixins of " + identifier
+                                    + " were not applied at startup because it was disabled. Restart the server to apply them.");
+        }
+        this.lock.readLock().lock();
+        try {
+            PluginClassLoader cached = this.classLoaders.get(source);
+            if (cached != null && !hyinit$isLoaderInUse(cached, source) && this.classLoaders.remove(source, cached)) {
+                cached.close();
+            }
+        } finally {
+            this.lock.readLock().unlock();
         }
         URL url = UrlUtil.asUrl(source);
         return this.classLoaders.computeIfAbsent(

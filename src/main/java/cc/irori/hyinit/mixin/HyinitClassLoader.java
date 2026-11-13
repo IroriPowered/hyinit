@@ -1,3 +1,21 @@
+/*
+ * Copyright 2016 FabricMC
+ * Copyright 2026 IroriPowered
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ * Modified from Fabric Loader's net/fabricmc/loader/impl/launch/knot/KnotClassDelegate.java and KnotClassLoader.java for Hyinit.
+ */
 package cc.irori.hyinit.mixin;
 
 import cc.irori.hyinit.HyinitLogger;
@@ -5,22 +23,12 @@ import cc.irori.hyinit.shared.NativeClassDefiner;
 import cc.irori.hyinit.shared.SourceMetaStore;
 import cc.irori.hyinit.shared.SourceMetadata;
 import cc.irori.hyinit.util.LoaderUtil;
-import cc.irori.hyinit.util.ManifestUtil;
 import cc.irori.hyinit.util.UrlConversionException;
 import cc.irori.hyinit.util.UrlUtil;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.net.JarURLConnection;
-import java.net.URI;
-import java.net.URISyntaxException;
 import java.net.URL;
-import java.net.URLConnection;
-import java.nio.file.FileSystem;
-import java.nio.file.FileSystemAlreadyExistsException;
-import java.nio.file.FileSystemNotFoundException;
-import java.nio.file.FileSystems;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.CodeSource;
 import java.security.SecureClassLoader;
@@ -36,7 +44,6 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
-import java.util.jar.Manifest;
 import org.spongepowered.asm.mixin.MixinEnvironment;
 import org.spongepowered.asm.mixin.extensibility.IMixinConfig;
 import org.spongepowered.asm.mixin.extensibility.IMixinConfigSource;
@@ -59,7 +66,6 @@ public class HyinitClassLoader extends SecureClassLoader {
     private final ClassLoader originalLoader;
 
     private final Map<Path, Metadata> metadataCache = new ConcurrentHashMap<>();
-    private final Set<String> parentSourcedClasses = Collections.newSetFromMap(new ConcurrentHashMap<>());
     private final ReentrantReadWriteLock transformationGate = new ReentrantReadWriteLock(true);
 
     private IMixinTransformer transformer = null;
@@ -177,18 +183,37 @@ public class HyinitClassLoader extends SecureClassLoader {
 
     @Override
     protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
-        Lock lock = nativeClassDefiner == null ? transformationGate.readLock() : transformationGate.writeLock();
-        lock.lock();
-        if (lock == transformationGate.readLock() && nativeClassDefiner != null) {
-            lock.unlock();
-            lock = transformationGate.writeLock();
-            lock.lock();
-        }
-        try {
+        if (!definesLocally(name)) {
             return loadClassUnderGate(name, resolve);
+        }
+        Class<?> loaded = findLoadedClass(name);
+        if (loaded != null) {
+            if (resolve) {
+                resolveClass(loaded);
+            }
+            return loaded;
+        }
+
+        Lock lock = transformationGate.readLock();
+        lock.lock();
+        try {
+            NativeClassDefiner definer = nativeClassDefiner;
+            if (definer == null) {
+                return loadClassUnderGate(name, resolve);
+            }
+            synchronized (definer) {
+                return loadClassUnderGate(name, resolve);
+            }
         } finally {
             lock.unlock();
         }
+    }
+
+    private boolean definesLocally(String name) {
+        return !name.startsWith("cc.irori.hyinit.shared.")
+                && !name.equals(getClass().getName())
+                && !name.startsWith("java.")
+                && !isParentDelegated(name);
     }
 
     private Class<?> loadClassUnderGate(String name, boolean resolve) throws ClassNotFoundException {
@@ -241,8 +266,7 @@ public class HyinitClassLoader extends SecureClassLoader {
     }
 
     private Class<?> tryLoadClass(String name) throws ClassNotFoundException {
-        boolean parentSourced = isParentSourcedClass(name);
-        URL source = getClassResource(name, parentSourced);
+        URL source = getClassResource(name, false);
         byte[] input = getPreMixinClassByteArray(name, source);
 
         NativeClassDefiner definer = nativeClassDefiner;
@@ -269,26 +293,10 @@ public class HyinitClassLoader extends SecureClassLoader {
         return defineClassBytes(name, getPostMixinClassByteArray(name, bytes), source);
     }
 
-    private boolean isParentSourcedClass(String name) {
-        if (!parentSourcedClasses.isEmpty()) {
-            int pos = name.length();
-            while ((pos = name.lastIndexOf('$', pos - 1)) > 0) {
-                if (parentSourcedClasses.contains(name.substring(0, pos))) {
-                    return true;
-                }
-            }
-        }
-        return false;
-    }
-
     private Class<?> defineClassBytes(String name, byte[] input, CodeSource source) throws ClassNotFoundException {
         Class<?> existingClass = findLoadedClass(name);
         if (existingClass != null) {
             return existingClass;
-        }
-
-        if (isParentSourcedClass(name)) {
-            parentSourcedClasses.add(name);
         }
 
         if (source == null) {
@@ -471,36 +479,8 @@ public class HyinitClassLoader extends SecureClassLoader {
     }
 
     private Metadata getMetadata(Path sourcePath) {
-        return metadataCache.computeIfAbsent(sourcePath, path -> {
-            Manifest manifest = null;
-            Certificate[] certificates = null;
-
-            try {
-                if (Files.isDirectory(path)) {
-                    manifest = ManifestUtil.readManifestFromBasePath(path);
-                } else {
-                    URLConnection connection = new URL("jar:" + path.toUri() + "!/").openConnection();
-
-                    if (connection instanceof JarURLConnection) {
-                        manifest = ((JarURLConnection) connection).getManifest();
-                        certificates = ((JarURLConnection) connection).getCertificates();
-                    }
-
-                    if (manifest == null) {
-                        try (FileSystemWrapper fs = getJarFileSystem(path.toUri(), false)) {
-                            manifest = ManifestUtil.readManifestFromBasePath(fs.delegate()
-                                    .getRootDirectories()
-                                    .iterator()
-                                    .next());
-                        }
-                    }
-                }
-            } catch (IOException | FileSystemNotFoundException e) {
-                HyinitLogger.get().warn("Failed to load manifest", e);
-            }
-
-            return new Metadata(manifest, new CodeSource(UrlUtil.asUrl(path), certificates));
-        });
+        return metadataCache.computeIfAbsent(
+                sourcePath, path -> new Metadata(new CodeSource(UrlUtil.asUrl(path), (Certificate[]) null)));
     }
 
     private static final Set<String> PARENT_DELEGATED =
@@ -530,7 +510,7 @@ public class HyinitClassLoader extends SecureClassLoader {
             "org.apache.logging.",
             "ch.qos.logback.",
             "com.google.gson.",
-            "com.google.flogger.",
+            "com.google.common.flogger.",
             "org.bouncycastle.",
             "com.hypixel.hytale.plugin.early.ClassTransformer");
 
@@ -571,42 +551,7 @@ public class HyinitClassLoader extends SecureClassLoader {
         }
     }
 
-    private static FileSystemWrapper getJarFileSystem(URI uri, boolean create) throws IOException {
-        URI jarUri;
-        try {
-            jarUri = new URI("jar:" + uri.getScheme(), uri.getHost(), uri.getPath(), uri.getFragment());
-        } catch (URISyntaxException e) {
-            throw new IOException(e);
-        }
-
-        boolean opened = false;
-        FileSystem fs = null;
-        try {
-            fs = FileSystems.getFileSystem(jarUri);
-        } catch (FileSystemNotFoundException ignore) {
-            try {
-                fs = FileSystems.newFileSystem(jarUri, Collections.emptyMap());
-                opened = true;
-            } catch (FileSystemAlreadyExistsException ignore2) {
-                fs = FileSystems.getFileSystem(jarUri);
-            } catch (IOException e) {
-                throw new IOException("Error accessing " + uri + ": " + e, e);
-            }
-        }
-
-        return new FileSystemWrapper(fs, opened);
-    }
-
-    private record Metadata(Manifest manifest, CodeSource codeSource) {
-        static final Metadata EMPTY = new Metadata(null, null);
-    }
-
-    private record FileSystemWrapper(FileSystem delegate, boolean owned) implements AutoCloseable {
-        @Override
-        public void close() throws IOException {
-            if (owned) {
-                delegate.close();
-            }
-        }
+    private record Metadata(CodeSource codeSource) {
+        static final Metadata EMPTY = new Metadata(null);
     }
 }

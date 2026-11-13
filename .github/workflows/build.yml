@@ -18,6 +18,20 @@ jobs:
         run: chmod +x ./gradlew
       - name: Build
         run: ./gradlew build
+      - name: Check formatting
+        run: git diff --exit-code
+      - name: Resolve Hytale server JAR
+        id: server
+        run: echo "jar=$(./gradlew -q printHytaleServerJar)" >> "$GITHUB_OUTPUT"
+      - name: Verify runtime behaviour
+        run: bash scripts/verify-all.sh build/libs/Hyinit-*.jar "${{ steps.server.outputs.jar }}" "$JAVA_HOME" "$RUNNER_TEMP"
+      - name: Capture verification evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: Verification
+          path: ${{ runner.temp }}/verify-*
+          if-no-files-found: ignore
       - name: Capture build artifacts
         uses: actions/upload-artifact@v7
         with:

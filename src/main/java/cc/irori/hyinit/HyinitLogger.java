@@ -1,6 +1,9 @@
 package cc.irori.hyinit;
 
 import com.hypixel.hytale.logger.HytaleLogger;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
 import org.spongepowered.asm.logging.ILogger;
 import org.spongepowered.asm.logging.Level;
 import org.spongepowered.asm.logging.LoggerAdapterConsole;
@@ -10,7 +13,21 @@ public final class HyinitLogger implements ILogger {
     private static final HyinitLogger INSTANCE = new HyinitLogger();
 
     private static final String LOGGER_NAME = "Hyinit";
-    private static final ILogger JAVA_LOGGER = new LoggerAdapterConsole(LOGGER_NAME);
+    private static final ILogger JAVA_LOGGER = new LoggerAdapterConsole(LOGGER_NAME) {
+        @Override
+        public void log(Level level, String message, Object... params) {
+            remember(level, new FormattedMessage(message, params).getMessage());
+            super.log(level, message, params);
+        }
+
+        @Override
+        public void log(Level level, String message, Throwable t) {
+            remember(level, message);
+            super.log(level, message, t);
+        }
+    };
+
+    private static List<Map.Entry<java.util.logging.Level, String>> startupLines = new ArrayList<>();
 
     private HytaleLogger hytaleLogger;
 
@@ -30,7 +47,7 @@ public final class HyinitLogger implements ILogger {
             JAVA_LOGGER.catching(level, t);
             return;
         }
-        hytaleLogger.at(toJavaLevel(level)).log();
+        hytaleLogger.at(toJavaLevel(level)).withCause(t).log();
     }
 
     @Override
@@ -39,7 +56,7 @@ public final class HyinitLogger implements ILogger {
             JAVA_LOGGER.catching(t);
             return;
         }
-        hytaleLogger.at(java.util.logging.Level.SEVERE).log();
+        hytaleLogger.at(java.util.logging.Level.SEVERE).withCause(t).log();
     }
 
     @Override
@@ -48,7 +65,7 @@ public final class HyinitLogger implements ILogger {
             JAVA_LOGGER.trace(message, params);
             return;
         }
-        hytaleLogger.at(java.util.logging.Level.FINEST).log(replaceParams(message), params);
+        hytaleLogger.at(java.util.logging.Level.FINEST).logVarargs(replaceParams(message), params);
     }
 
     @Override
@@ -66,7 +83,7 @@ public final class HyinitLogger implements ILogger {
             JAVA_LOGGER.debug(message, params);
             return;
         }
-        hytaleLogger.at(java.util.logging.Level.FINE).log(replaceParams(message), params);
+        hytaleLogger.at(java.util.logging.Level.FINE).logVarargs(replaceParams(message), params);
     }
 
     @Override
@@ -84,7 +101,7 @@ public final class HyinitLogger implements ILogger {
             JAVA_LOGGER.info(message, params);
             return;
         }
-        hytaleLogger.at(java.util.logging.Level.INFO).log(replaceParams(message), params);
+        hytaleLogger.at(java.util.logging.Level.INFO).logVarargs(replaceParams(message), params);
     }
 
     @Override
@@ -102,7 +119,7 @@ public final class HyinitLogger implements ILogger {
             JAVA_LOGGER.warn(message, params);
             return;
         }
-        hytaleLogger.at(java.util.logging.Level.WARNING).log(replaceParams(message), params);
+        hytaleLogger.at(java.util.logging.Level.WARNING).logVarargs(replaceParams(message), params);
     }
 
     @Override
@@ -120,7 +137,7 @@ public final class HyinitLogger implements ILogger {
             JAVA_LOGGER.error(message, params);
             return;
         }
-        hytaleLogger.at(java.util.logging.Level.SEVERE).log(replaceParams(message), params);
+        hytaleLogger.at(java.util.logging.Level.SEVERE).logVarargs(replaceParams(message), params);
     }
 
     @Override
@@ -148,7 +165,7 @@ public final class HyinitLogger implements ILogger {
             JAVA_LOGGER.log(level, message, params);
             return;
         }
-        hytaleLogger.at(toJavaLevel(level)).log(replaceParams(message), params);
+        hytaleLogger.at(toJavaLevel(level)).logVarargs(replaceParams(message), params);
     }
 
     @Override
@@ -201,5 +218,17 @@ public final class HyinitLogger implements ILogger {
 
     public static HyinitLogger get() {
         return INSTANCE;
+    }
+
+    private static synchronized void remember(Level level, String message) {
+        if (startupLines != null) {
+            startupLines.add(Map.entry(toJavaLevel(level), message));
+        }
+    }
+
+    public static synchronized List<Map.Entry<java.util.logging.Level, String>> drainStartupLines() {
+        List<Map.Entry<java.util.logging.Level, String>> lines = startupLines == null ? List.of() : startupLines;
+        startupLines = null;
+        return lines;
     }
 }

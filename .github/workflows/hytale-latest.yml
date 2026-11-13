@@ -1,0 +1,41 @@
+name: Newest Hytale
+on:
+  schedule:
+    - cron: "0 20 * * 4"
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        repository: [release, pre-release]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+      - name: Setup JDK
+        uses: actions/setup-java@v6
+        with:
+          java-version: "25"
+          distribution: "temurin"
+      - name: Build Hyinit
+        run: chmod +x ./gradlew && ./gradlew build
+      - name: Download newest Hytale ${{ matrix.repository }}
+        id: server
+        run: |
+          base="https://maven.hytale.com/${{ matrix.repository }}/com/hypixel/hytale/Server"
+          version=$(curl -fsSL "$base/maven-metadata.xml" | sed -n 's:.*<latest>\(.*\)</latest>.*:\1:p')
+          test -n "$version"
+          curl -fsSL -o "$RUNNER_TEMP/Server.jar" "$base/$version/Server-$version.jar"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Testing against Hytale $version" >> "$GITHUB_STEP_SUMMARY"
+      - name: Verify runtime behaviour on Hytale ${{ steps.server.outputs.version }}
+        run: bash scripts/verify-all.sh build/libs/Hyinit-*.jar "$RUNNER_TEMP/Server.jar" "$JAVA_HOME" "$RUNNER_TEMP"
+      - name: Capture verification evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: Verification-${{ matrix.repository }}-${{ steps.server.outputs.version }}
+          path: ${{ runner.temp }}/verify-*
+          if-no-files-found: ignore

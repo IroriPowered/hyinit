@@ -8,10 +8,7 @@ import java.util.logging.Logger;
 public class HyinitLogManager extends LogManager {
 
     private static HyinitLogManager instance;
-    private static Object hytaleLogManager;
-
-    private static Method resetMethod;
-    private static Method getLoggerMethod;
+    private static volatile Delegate delegate;
 
     public HyinitLogManager() {
         instance = this;
@@ -19,37 +16,37 @@ public class HyinitLogManager extends LogManager {
 
     @Override
     public void reset() {
-        if (!isDelegated()) {
+        Delegate current = delegate;
+        if (current == null) {
             super.reset();
             return;
         }
-        ReflectionUtil.invokeMethod(resetMethod, hytaleLogManager);
+        ReflectionUtil.invokeMethod(current.reset(), current.manager());
     }
 
     @Override
     public Logger getLogger(String name) {
-        if (!isDelegated()) {
+        Delegate current = delegate;
+        if (current == null) {
             return super.getLogger(name);
         }
-        return (Logger) ReflectionUtil.invokeMethod(getLoggerMethod, hytaleLogManager, name);
+        return (Logger) ReflectionUtil.invokeMethod(current.getLogger(), current.manager(), name);
     }
 
-    public static void enableDelegate(Object delegate) {
-        if (hytaleLogManager != null) {
+    public static synchronized void enableDelegate(Object manager) {
+        if (delegate != null) {
             throw new IllegalStateException("HytaleLogManager delegate is already set");
         }
 
         try {
-            hytaleLogManager = delegate;
-
-            resetMethod = ReflectionUtil.getDeclaredMethod(delegate.getClass(), "reset");
-            getLoggerMethod = ReflectionUtil.getDeclaredMethod(delegate.getClass(), "getLogger", String.class);
+            delegate = new Delegate(
+                    manager,
+                    ReflectionUtil.getDeclaredMethod(manager.getClass(), "reset"),
+                    ReflectionUtil.getDeclaredMethod(manager.getClass(), "getLogger", String.class));
         } catch (Throwable e) {
             HyinitLogger.get().error("Failed to initialize HytaleLogManager delegate", e);
         }
     }
 
-    private static boolean isDelegated() {
-        return hytaleLogManager != null;
-    }
+    private record Delegate(Object manager, Method reset, Method getLogger) {}
 }

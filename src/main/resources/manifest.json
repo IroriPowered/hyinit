@@ -2,7 +2,7 @@
     "Group": "IroriPowered",
     "Name": "Hyinit",
     "Version": "${version}",
-    "Description": "Restriction-free Mixin bootstrapper for Hytale.",
+    "Description": "Mixin launcher for Hytale servers. Launch the server with this JAR; do not install it as a plugin.",
     "Main": "cc.irori.hyinit.dummy.DummyPlugin",
     "Authors": [
         {

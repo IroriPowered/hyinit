@@ -26,6 +26,9 @@ public final class ServerJarLocator {
 
         Optional<Path> parsed = parseServerJarArg(args);
         if (parsed.isPresent()) {
+            if (!Files.isRegularFile(parsed.get())) {
+                throw new ConfigCollector.StartupValidationException("Server JAR not found: " + parsed.get());
+            }
             return parsed.get();
         }
 
@@ -44,7 +47,8 @@ public final class ServerJarLocator {
             }
         }
 
-        throw new IllegalArgumentException("Could not locate HytaleServer. Specify the path using --server-jar");
+        throw new ConfigCollector.StartupValidationException(
+                "Could not locate HytaleServer. Specify the path using --server-jar");
     }
 
     public static Path getSelfDirectory() {

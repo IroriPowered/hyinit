@@ -5,13 +5,13 @@ import com.hypixel.hytale.logger.HytaleLogger;
 import com.hypixel.hytale.server.core.plugin.JavaPlugin;
 import com.hypixel.hytale.server.core.plugin.JavaPluginInit;
 import java.io.File;
-import org.jspecify.annotations.NonNull;
+import javax.annotation.Nonnull;
 
 public class DummyPlugin extends JavaPlugin {
 
     private static final HytaleLogger LOGGER = HytaleLogger.get("Hyinit");
 
-    public DummyPlugin(@NonNull JavaPluginInit init) {
+    public DummyPlugin(@Nonnull JavaPluginInit init) {
         super(init);
     }
 
