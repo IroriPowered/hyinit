@@ -40,9 +40,11 @@ Only existing directories are scanned. JARs are sorted by filename within each d
 
 Class lookup prefers the server JAR, then Hyinit, then early-plugin scan order.
 
+Mixin configs are read in a different order: all early-plugin JARs sorted by full real path. That order decides which identical copy is kept, which same-named config keeps its name and the order in which configs are registered.
+
 ## Duplicate and disabled plugins
 
-Byte-identical copies of a JAR are loaded once, with a warning. Different JARs with the same `Group:Name` ID stop startup, even if their versions match. This also applies to disabled plugins.
+Byte-identical copies of a JAR with the same `Group:Name` ID are loaded once, with a warning. JARs without an ID are not compared. Different JARs with the same `Group:Name` ID stop startup, even if their versions match. This also applies to disabled plugins.
 
 `Mods` entries in Hytale's `config.json` are keyed by `Group:Name`. Setting a plugin's `Enabled` to `false` skips its Mixins, not its classes or native transformers. A plugin whose manifest sets `DisabledByDefault` is skipped the same way unless its `Enabled` is `true`. Remove its JAR from all scanned directories to disable it completely.
 
@@ -50,9 +52,14 @@ Mixins are chosen at launch. Enabling a skipped plugin while the server runs doe
 
 ## Checking Mixins
 
-A Mixin is applied when its target class is first loaded, which can be long after startup. `--check-mixins` loads all target classes at once and exits with status 1 if any Mixin fails to apply. Run it after updating Hytale, Hyinit or a plugin.
+A Mixin is applied when its target class is first loaded, which can be long after startup. `--check-mixins` loads all target classes at once and exits with status 1 if any of them fails to load. Run it after updating Hytale, Hyinit or a plugin.
 
-The check does not run static initialisers or native transformers. It does not detect injectors that are allowed to match nothing.
+The check has limits:
+
+- It does not run static initialisers or native transformers.
+- It does not detect injectors that are allowed to match nothing.
+- It does not detect a failing Mixin in a config without `"required": true`. Mixin only logs those.
+- A target class that is not found is logged as a warning.
 
 ## Crash reporting
 
