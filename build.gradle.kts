@@ -110,7 +110,7 @@ tasks {
 
     jar {
         manifest {
-            attributes("Main-Class" to "cc.irori.hyinit.Main")
+            attributes("Main-Class" to "cc.irori.hyinit.Main", "Enable-Native-Access" to "ALL-UNNAMED")
         }
     }
 

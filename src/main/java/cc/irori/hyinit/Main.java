@@ -22,6 +22,7 @@ import cc.irori.hyinit.mixin.HyinitClassLoader;
 import cc.irori.hyinit.mixin.HyinitMixinBootstrap;
 import cc.irori.hyinit.mixin.HyinitMixinService;
 import cc.irori.hyinit.mixin.MixinCompatibility;
+import cc.irori.hyinit.shared.SourceMetaStore;
 import cc.irori.hyinit.shared.SourceMetadata;
 import cc.irori.hyinit.util.SneakyThrow;
 import com.google.gson.JsonParser;
@@ -111,6 +112,7 @@ public final class Main {
 
         ConfigCollector.Result result = ConfigCollector.collectMixinConfigs(cwd, earlyPluginDirs);
         result.warnings().forEach(LOGGER::warn);
+        SourceMetaStore.setSkippedJars(result.excludedJars());
 
         Set<Path> addedJars = new HashSet<>();
         List<Path> earlyJars = new ArrayList<>();

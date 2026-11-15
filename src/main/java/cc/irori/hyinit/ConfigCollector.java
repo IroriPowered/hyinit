@@ -64,6 +64,13 @@ public final class ConfigCollector {
 
                 JsonObject root = readJsonObject(jf, entry);
                 String id = pluginId(root);
+                // Hyxin's transformer starts a second Mixin service and fails on every class
+                if (id.equals("Build-9:Hyxin")) {
+                    excludedJars.add(jar);
+                    warnings.add("Skipping " + jar
+                            + ". Hyinit loads Hyxin mods itself, so Hyxin is not needed and can be removed.");
+                    continue;
+                }
                 if (!id.equals(":")) {
                     Path owner = jarsById.putIfAbsent(id, jar);
                     if (owner != null) {

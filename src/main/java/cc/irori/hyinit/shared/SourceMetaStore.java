@@ -6,11 +6,14 @@ import java.nio.file.Path;
 import java.security.CodeSource;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 public final class SourceMetaStore {
 
     private static final Map<Path, SourceMetadata> META_MAP = new ConcurrentHashMap<>();
+
+    private static volatile Set<Path> skippedJars = Set.of();
 
     private static final ClassValue<Optional<Path>> CLASS_PATHS = new ClassValue<>() {
         @Override
@@ -35,6 +38,14 @@ public final class SourceMetaStore {
 
     public static SourceMetadata get(Path path) {
         return META_MAP.get(path);
+    }
+
+    public static void setSkippedJars(Set<Path> jars) {
+        skippedJars = jars;
+    }
+
+    public static boolean isSkipped(Path jar) {
+        return skippedJars.contains(jar);
     }
 
     public static SourceMetadata metadataOf(Class<?> type) {
