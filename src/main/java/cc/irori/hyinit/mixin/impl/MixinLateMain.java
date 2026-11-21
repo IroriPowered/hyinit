@@ -1,13 +1,14 @@
 package cc.irori.hyinit.mixin.impl;
 
+import cc.irori.hyinit.mixin.HyinitClassLoader;
 import cc.irori.hyinit.util.ReflectionUtil;
 import com.hypixel.hytale.LateMain;
 import com.hypixel.hytale.logger.HytaleLogger;
+import com.hypixel.hytale.logger.backend.HytaleFileHandler;
 import com.hypixel.hytale.logger.backend.HytaleLogManager;
 import java.lang.reflect.Method;
 import java.util.List;
-import java.util.Map;
-import java.util.logging.Level;
+import java.util.logging.LogRecord;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
@@ -18,8 +19,13 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public class MixinLateMain {
 
     @Unique
+    private static ClassLoader hyinit$launcherClassLoader() {
+        return HyinitClassLoader.class.getClassLoader();
+    }
+
+    @Unique
     private static final Class<?> hyinit$HYINIT_LOG_MANAGER =
-            ReflectionUtil.loadClassOrNull(ClassLoader.getSystemClassLoader(), "cc.irori.hyinit.HyinitLogManager");
+            ReflectionUtil.loadClassOrNull(hyinit$launcherClassLoader(), "cc.irori.hyinit.HyinitLogManager");
 
     @Unique
     private static final Method hyinit$ENABLE_DELEGATE_METHOD =
@@ -38,7 +44,7 @@ public class MixinLateMain {
 
     @Unique
     private static final Method hyinit$DRAIN_STARTUP_LINES_METHOD = ReflectionUtil.getDeclaredMethod(
-            ReflectionUtil.loadClassOrNull(ClassLoader.getSystemClassLoader(), "cc.irori.hyinit.HyinitLogger"),
+            ReflectionUtil.loadClassOrNull(hyinit$launcherClassLoader(), "cc.irori.hyinit.HyinitLogger"),
             "drainStartupLines");
 
     @Inject(
@@ -51,9 +57,10 @@ public class MixinLateMain {
     @SuppressWarnings("unchecked")
     private static void hyinit$replayStartupLines(String[] args, CallbackInfo ci) {
         HytaleLogger logger = HytaleLogger.get("Hyinit");
-        for (Map.Entry<Level, String> line :
-                (List<Map.Entry<Level, String>>) ReflectionUtil.invokeMethod(hyinit$DRAIN_STARTUP_LINES_METHOD, null)) {
-            logger.at(line.getKey()).log(line.getValue());
+        for (LogRecord line : (List<LogRecord>) ReflectionUtil.invokeMethod(hyinit$DRAIN_STARTUP_LINES_METHOD, null)) {
+            if (logger.at(line.getLevel()).isEnabled()) {
+                HytaleFileHandler.INSTANCE.log(line);
+            }
         }
     }
 }

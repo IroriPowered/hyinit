@@ -1,6 +1,6 @@
 package cc.irori.hyinit.mixin.impl;
 
-import cc.irori.hyinit.dummy.DummyClassTransformer;
+import cc.irori.hyinit.early.EarlyLaunchTransformer;
 import cc.irori.hyinit.shared.SourceMetaStore;
 import cc.irori.hyinit.util.LoaderUtil;
 import com.hypixel.hytale.plugin.early.ClassTransformer;
@@ -34,13 +34,8 @@ public class MixinEarlyPluginLoader {
                             target = "Ljava/util/List;sort(Ljava/util/Comparator;)V",
                             shift = At.Shift.BEFORE))
     private static void hyinit$preventHyinitEarlyLoad(String[] args, CallbackInfo ci) {
-        for (int i = transformers.size() - 1; i >= 0; i--) {
-            ClassTransformer transformer = transformers.get(i);
-            if (transformer.getClass().equals(DummyClassTransformer.class)) {
-                transformers.remove(i);
-                break;
-            }
-        }
+        transformers.removeIf(
+                transformer -> transformer.getClass().getName().equals(EarlyLaunchTransformer.class.getName()));
     }
 
     @Redirect(

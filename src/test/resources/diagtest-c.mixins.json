@@ -1,0 +1,11 @@
+{
+    "required": false,
+    "minVersion": "0.8",
+    "package": "diagtest.mixin.c",
+    "injectors": {
+        "defaultRequire": 1
+    },
+    "mixins": [
+        "BrokenMixin"
+    ]
+}

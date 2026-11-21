@@ -3,7 +3,7 @@ package cc.irori.hyinit;
 import com.hypixel.hytale.logger.HytaleLogger;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
+import java.util.logging.LogRecord;
 import org.spongepowered.asm.logging.ILogger;
 import org.spongepowered.asm.logging.Level;
 import org.spongepowered.asm.logging.LoggerAdapterConsole;
@@ -16,18 +16,19 @@ public final class HyinitLogger implements ILogger {
     private static final ILogger JAVA_LOGGER = new LoggerAdapterConsole(LOGGER_NAME) {
         @Override
         public void log(Level level, String message, Object... params) {
-            remember(level, new FormattedMessage(message, params).getMessage());
+            FormattedMessage formatted = new FormattedMessage(message, params);
+            remember(level, formatted.getMessage(), formatted.getThrowable());
             super.log(level, message, params);
         }
 
         @Override
         public void log(Level level, String message, Throwable t) {
-            remember(level, message);
+            remember(level, message, t);
             super.log(level, message, t);
         }
     };
 
-    private static List<Map.Entry<java.util.logging.Level, String>> startupLines = new ArrayList<>();
+    private static List<LogRecord> startupLines = new ArrayList<>();
 
     private HytaleLogger hytaleLogger;
 
@@ -220,14 +221,18 @@ public final class HyinitLogger implements ILogger {
         return INSTANCE;
     }
 
-    private static synchronized void remember(Level level, String message) {
-        if (startupLines != null) {
-            startupLines.add(Map.entry(toJavaLevel(level), message));
+    private static synchronized void remember(Level level, String message, Throwable t) {
+        if (startupLines == null) {
+            return;
         }
+        LogRecord line = new LogRecord(toJavaLevel(level), message);
+        line.setLoggerName(LOGGER_NAME);
+        line.setThrown(t);
+        startupLines.add(line);
     }
 
-    public static synchronized List<Map.Entry<java.util.logging.Level, String>> drainStartupLines() {
-        List<Map.Entry<java.util.logging.Level, String>> lines = startupLines == null ? List.of() : startupLines;
+    public static synchronized List<LogRecord> drainStartupLines() {
+        List<LogRecord> lines = startupLines == null ? List.of() : startupLines;
         startupLines = null;
         return lines;
     }

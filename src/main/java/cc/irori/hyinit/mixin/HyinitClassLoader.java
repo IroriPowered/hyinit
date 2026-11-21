@@ -19,6 +19,7 @@
 package cc.irori.hyinit.mixin;
 
 import cc.irori.hyinit.HyinitLogger;
+import cc.irori.hyinit.shared.DiagnosticsStore;
 import cc.irori.hyinit.shared.NativeClassDefiner;
 import cc.irori.hyinit.shared.SourceMetaStore;
 import cc.irori.hyinit.shared.SourceMetadata;
@@ -44,11 +45,13 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
+import org.spongepowered.asm.mixin.FabricUtil;
 import org.spongepowered.asm.mixin.MixinEnvironment;
 import org.spongepowered.asm.mixin.extensibility.IMixinConfig;
 import org.spongepowered.asm.mixin.extensibility.IMixinConfigSource;
 import org.spongepowered.asm.mixin.transformer.Config;
 import org.spongepowered.asm.mixin.transformer.IMixinTransformer;
+import org.spongepowered.asm.mixin.transformer.throwables.InvalidMixinException;
 
 public class HyinitClassLoader extends SecureClassLoader {
 
@@ -104,6 +107,10 @@ public class HyinitClassLoader extends SecureClassLoader {
 
     public static void setMixinConfigs(Collection<Config> configs) {
         mixinConfigs = List.copyOf(configs);
+    }
+
+    static List<Config> mixinConfigs() {
+        return mixinConfigs;
     }
 
     public boolean isTransformerInitialized() {
@@ -344,6 +351,9 @@ public class HyinitClassLoader extends SecureClassLoader {
                     return generated;
                 }
             } catch (Throwable t) {
+                if (DEBUG) {
+                    HyinitLogger.get().warn(String.format("Generating synthetic class %s failed", name), t);
+                }
                 // Not a synthetic class. Fall through.
             }
         }
@@ -419,6 +429,7 @@ public class HyinitClassLoader extends SecureClassLoader {
         }
 
         if (original != null) {
+            long start = System.nanoTime();
             try {
                 return transformer.transformClassBytes(name, name, original);
             } catch (Throwable t) {
@@ -428,7 +439,14 @@ public class HyinitClassLoader extends SecureClassLoader {
                     message = message + " (applied by " + origin + ")";
                 }
                 HyinitLogger.get().error(message, t);
-                throw new RuntimeException(message, t);
+                String blamed = blamedJar(t);
+                if (blamed == null && origin != null && !origin.contains(", ")) {
+                    blamed = origin;
+                }
+                DiagnosticsStore.addProblem(DiagnosticsStore.ERROR, message, blamed, t);
+                throw new TransformationException(message, t);
+            } finally {
+                DiagnosticsStore.addTransformation(System.nanoTime() - start);
             }
         }
 
@@ -443,6 +461,9 @@ public class HyinitClassLoader extends SecureClassLoader {
                 return generated;
             }
         } catch (Throwable t) {
+            if (DEBUG) {
+                HyinitLogger.get().warn(String.format("Generating synthetic class %s failed", name), t);
+            }
             // fall through on no synthetic classes
         }
 
@@ -528,6 +549,23 @@ public class HyinitClassLoader extends SecureClassLoader {
             origins.append(source != null ? source.getDescription() : config.getName());
         }
         return origins.length() == 0 ? null : origins.toString();
+    }
+
+    public static String blamedJar(Throwable failure) {
+        for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
+            if (cause instanceof InvalidMixinException invalid) {
+                return invalid.getMixin() == null
+                        ? null
+                        : FabricUtil.getModId(invalid.getMixin().getConfig(), null);
+            }
+        }
+        return null;
+    }
+
+    public static final class TransformationException extends RuntimeException {
+        private TransformationException(String message, Throwable cause) {
+            super(message, cause);
+        }
     }
 
     private static boolean canTransformClass(String name) {

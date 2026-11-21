@@ -24,7 +24,8 @@ public class DummyPlugin extends JavaPlugin {
         LOGGER.atSevere().log("========== HYINIT IS NOT A PLUGIN! ==========");
         LOGGER.atSevere().log("To use Hyinit, you must launch the server via");
         LOGGER.atSevere().log("the Hyinit JAR. In your launch argument, replace");
-        LOGGER.atSevere().log(hytaleServer.getName() + " with " + pluginFile.getName() + ".");
+        LOGGER.atSevere().log(hytaleServer.getName() + " with " + pluginFile.getName() + ",");
+        LOGGER.atSevere().log("or move " + pluginFile.getName() + " to an early-plugin directory.");
         LOGGER.atSevere().log("=============================================");
     }
 }

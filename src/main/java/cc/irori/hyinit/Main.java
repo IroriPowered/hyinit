@@ -22,12 +22,17 @@ import cc.irori.hyinit.mixin.HyinitClassLoader;
 import cc.irori.hyinit.mixin.HyinitMixinBootstrap;
 import cc.irori.hyinit.mixin.HyinitMixinService;
 import cc.irori.hyinit.mixin.MixinCompatibility;
+import cc.irori.hyinit.mixin.MixinErrorRecorder;
+import cc.irori.hyinit.mixin.MixinOriginExtension;
+import cc.irori.hyinit.shared.DiagnosticsStore;
 import cc.irori.hyinit.shared.SourceMetaStore;
 import cc.irori.hyinit.shared.SourceMetadata;
 import cc.irori.hyinit.util.SneakyThrow;
 import com.google.gson.JsonParser;
 import com.llamalad7.mixinextras.MixinExtrasBootstrap;
+import com.llamalad7.mixinextras.service.MixinExtrasVersion;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.Reader;
 import java.lang.invoke.MethodHandle;
@@ -38,13 +43,21 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.HexFormat;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.concurrent.ForkJoinPool;
+import java.util.logging.LogManager;
 import java.util.stream.Stream;
 import org.spongepowered.asm.launch.MixinBootstrap;
 import org.spongepowered.asm.mixin.FabricUtil;
@@ -53,6 +66,8 @@ import org.spongepowered.asm.mixin.Mixins;
 import org.spongepowered.asm.mixin.extensibility.IMixinConfig;
 import org.spongepowered.asm.mixin.extensibility.IMixinConfigSource;
 import org.spongepowered.asm.mixin.transformer.Config;
+import org.spongepowered.asm.mixin.transformer.ext.Extensions;
+import org.spongepowered.asm.mixin.transformer.throwables.InvalidMixinException;
 
 public final class Main {
 
@@ -68,7 +83,18 @@ public final class Main {
             return;
         }
         try {
-            launch(args);
+            launch(args, ServerJarLocator.locate(args), false);
+        } catch (ConfigCollector.StartupValidationException e) {
+            LOGGER.error(e.getMessage());
+            System.exit(1);
+        }
+    }
+
+    public static void launchFromEarlyPlugin(String[] args, Path serverJar) throws Exception {
+        Thread.currentThread().setContextClassLoader(Main.class.getClassLoader());
+        ForkJoinPool.commonPool();
+        try {
+            launch(args, serverJar, true);
         } catch (ConfigCollector.StartupValidationException e) {
             LOGGER.error(e.getMessage());
             System.exit(1);
@@ -85,15 +111,31 @@ public final class Main {
         }
     }
 
-    private static void launch(String[] args) throws Exception {
-        Path cwd = Paths.get("").toAbsolutePath().normalize();
+    static String recordLaunch(boolean fromEarlyPlugin) throws IOException {
+        String version = version();
+        System.setProperty("hyinit.version", version);
+        DiagnosticsStore.setLaunch(
+                version,
+                fromEarlyPlugin ? "earlyPlugin" : "launcher",
+                MixinBootstrap.VERSION,
+                MixinExtrasVersion.LATEST.toString(),
+                MixinCompatibility.format(MixinCompatibility.LATEST));
+        return version;
+    }
 
-        Path serverJar = ServerJarLocator.locate(args);
+    private static void launch(String[] args, Path serverJar, boolean fromEarlyPlugin) throws Exception {
+        long launchStart = System.nanoTime();
+        recordLaunch(fromEarlyPlugin);
+        Path cwd = Paths.get("").toAbsolutePath().normalize();
 
         System.out.println("Using server jar: " + serverJar);
 
-        Path selfJar = Paths.get(
-                Main.class.getProtectionDomain().getCodeSource().getLocation().toURI());
+        Path selfJar = Paths.get(Main.class
+                        .getProtectionDomain()
+                        .getCodeSource()
+                        .getLocation()
+                        .toURI())
+                .toRealPath();
 
         HyinitClassLoader classLoader = new HyinitClassLoader();
         classLoader.addCodeSource(serverJar, new SourceMetadata(false));
@@ -110,14 +152,18 @@ public final class Main {
         }
         List<Path> earlyPluginDirs = new ArrayList<>(earlyPluginDirsSet);
 
-        ConfigCollector.Result result = ConfigCollector.collectMixinConfigs(cwd, earlyPluginDirs);
-        result.warnings().forEach(LOGGER::warn);
+        ConfigCollector.Result result = ConfigCollector.collectMixinConfigs(cwd, earlyPluginDirs, selfJar);
+        result.warnings().forEach(warning -> LOGGER.warn(warning.message()));
+        result.failures().forEach(failure -> LOGGER.warn(failure.message(), failure.cause()));
         SourceMetaStore.setSkippedJars(result.excludedJars());
 
         Set<Path> addedJars = new HashSet<>();
         List<Path> earlyJars = new ArrayList<>();
+        List<Path> knownPaths = new ArrayList<>(List.of(cwd, serverJar, selfJar));
+        knownPaths.addAll(earlyPluginDirs);
         for (Path dir : earlyPluginDirs) {
             for (Path path : collectClasspathJars(serverJar, dir)) {
+                knownPaths.add(path);
                 Path normalized = path.toRealPath();
                 if (addedJars.add(normalized) && !result.excludedJars().contains(normalized)) {
                     boolean hasMain = result.jarsWithMainClass().contains(normalized);
@@ -132,8 +178,10 @@ public final class Main {
                 }
             }
         }
+        recordStartup(result, earlyJars, knownPaths);
         ClassConflicts.Report conflicts = ClassConflicts.find(List.of(serverJar, selfJar), earlyJars);
         conflicts.errors().forEach(LOGGER::warn);
+        conflicts.errors().forEach(error -> DiagnosticsStore.addProblem(DiagnosticsStore.WARN, error, null, null));
         if (Boolean.getBoolean(FAIL_ON_CLASS_CONFLICTS)
                 && !conflicts.conflicts().isEmpty()) {
             conflicts.conflicts().forEach(LOGGER::error);
@@ -143,6 +191,9 @@ public final class Main {
                             + "=true is set. See the errors above.");
         }
         conflicts.conflicts().forEach(LOGGER::warn);
+        conflicts
+                .conflicts()
+                .forEach(conflict -> DiagnosticsStore.addProblem(DiagnosticsStore.WARN, conflict, null, null));
 
         if (defaultEarlyPluginDir != null) {
             earlyPluginDirs.remove(defaultEarlyPluginDir);
@@ -159,9 +210,19 @@ public final class Main {
         }
 
         System.setProperty("java.util.logging.manager", HyinitLogManager.class.getName());
+        if (fromEarlyPlugin) {
+            LogManager logManager = LogManager.getLogManager();
+            if (logManager.getClass() != HyinitLogManager.class) {
+                LOGGER.warn("java.util.logging was set up before Hyinit started, with " + logManager.getClass()
+                        + " from " + logManager.getClass().getClassLoader() + ". Hytale's log handling may not work.");
+            }
+        }
 
         System.setProperty("mixin.bootstrapService", HyinitMixinBootstrap.class.getName());
         System.setProperty("mixin.service", HyinitMixinService.class.getName());
+        if (List.of(args).contains("--check-mixins") && System.getProperty("mixin.debug.countInjections") == null) {
+            System.setProperty("mixin.debug.countInjections", "true");
+        }
 
         MixinBootstrap.init();
         MixinExtrasBootstrap.init();
@@ -185,6 +246,7 @@ public final class Main {
 
         List<Config> registered = List.copyOf(Mixins.getConfigs());
         HyinitClassLoader.setMixinConfigs(registered);
+        installDiagnostics(classLoader, registered);
 
         finishMixinBootstrapping();
 
@@ -201,6 +263,7 @@ public final class Main {
                 MethodHandle mainHandle = MethodHandles.lookup()
                         .findStatic(mainClass, "main", MethodType.methodType(void.class, String[].class))
                         .asFixedArity();
+                DiagnosticsStore.setBootstrapMillis((System.nanoTime() - launchStart) / 1_000_000);
                 mainHandle.invoke((Object) serverArgs);
             } catch (Throwable t) {
                 failure[0] = t;
@@ -210,6 +273,15 @@ public final class Main {
         thread.start();
         thread.join();
         if (failure[0] != null) {
+            for (Throwable cause = failure[0]; cause != null; cause = cause.getCause()) {
+                if (cause instanceof InvalidMixinException invalid) {
+                    String jar = invalid.getMixin() == null
+                            ? null
+                            : FabricUtil.getModId(invalid.getMixin().getConfig(), null);
+                    throw new ConfigCollector.StartupValidationException(
+                            invalid.getMessage() + (jar == null ? "." : ". Update or remove " + jar + "."));
+                }
+            }
             throw SneakyThrow.sneakyThrow(failure[0]);
         }
     }
@@ -248,7 +320,10 @@ public final class Main {
         } catch (LinkageError e) {
             LOGGER.error("Loading " + name + " failed", e);
             return false;
+        } catch (HyinitClassLoader.TransformationException e) {
+            return false;
         } catch (RuntimeException e) {
+            LOGGER.error("Loading " + name + " failed", e);
             return false;
         }
     }
@@ -262,7 +337,83 @@ public final class Main {
         return null;
     }
 
-    private static void addConfiguration(String config, Path origin, int compatibility) {
+    static void recordStartup(ConfigCollector.Result result, List<Path> earlyJars, List<Path> knownPaths) {
+        List<Path> known = new ArrayList<>(knownPaths);
+        known.addAll(earlyJars);
+        known.addAll(result.excludedJars());
+        known.addAll(result.pluginIds().keySet());
+        for (ConfigCollector.Problem problem : result.warnings()) {
+            known.add(problem.jar());
+        }
+        for (ConfigCollector.Problem problem : result.failures()) {
+            known.add(problem.jar());
+        }
+        String home = System.getProperty("user.home");
+        if (home != null && !home.isEmpty()) {
+            known.add(Paths.get(home));
+        }
+        DiagnosticsStore.addKnownPaths(known);
+        for (ConfigCollector.Problem problem : result.warnings()) {
+            DiagnosticsStore.addProblem(
+                    DiagnosticsStore.WARN,
+                    problem.message(),
+                    DiagnosticsStore.fileName(problem.jar()),
+                    problem.cause());
+        }
+        for (ConfigCollector.Problem problem : result.failures()) {
+            DiagnosticsStore.addProblem(
+                    DiagnosticsStore.WARN,
+                    problem.message(),
+                    DiagnosticsStore.fileName(problem.jar()),
+                    problem.cause());
+        }
+        Map<Path, List<String>> configsByJar = new HashMap<>();
+        result.origins()
+                .forEach((config, jar) -> configsByJar
+                        .computeIfAbsent(jar, key -> new ArrayList<>())
+                        .add(config));
+        List<Map<String, Object>> sources = new ArrayList<>();
+        for (Path jar : earlyJars) {
+            Map<String, Object> source = new LinkedHashMap<>();
+            Integer compatibility = result.mixinCompatibility().get(jar);
+            source.put("file", DiagnosticsStore.fileName(jar));
+            source.put("pluginId", result.pluginIds().get(jar));
+            source.put("version", result.versions().get(jar));
+            source.put("hasMain", result.jarsWithMainClass().contains(jar));
+            source.put("mixinsSkipped", result.mixinsSkipped().contains(jar));
+            source.put("mixinCompatibility", compatibility == null ? null : MixinCompatibility.format(compatibility));
+            source.put("sha256", sha256(jar));
+            source.put("configs", configsByJar.getOrDefault(jar, List.of()));
+            sources.add(source);
+        }
+        DiagnosticsStore.setSources(sources);
+    }
+
+    private static String sha256(Path jar) {
+        try (InputStream in = Files.newInputStream(jar)) {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] buffer = new byte[65536];
+            int read;
+            while ((read = in.read(buffer)) > 0) {
+                digest.update(buffer, 0, read);
+            }
+            return HexFormat.of().formatHex(digest.digest());
+        } catch (IOException | NoSuchAlgorithmException e) {
+            String message = "Failed to compute the SHA-256 of " + jar;
+            LOGGER.warn(message, e);
+            DiagnosticsStore.addProblem(DiagnosticsStore.WARN, message, DiagnosticsStore.fileName(jar), e);
+            return null;
+        }
+    }
+
+    static void installDiagnostics(HyinitClassLoader classLoader, List<Config> registered)
+            throws ClassNotFoundException {
+        ((Extensions) HyinitMixinService.getTransformer().getExtensions()).add(new MixinOriginExtension(registered));
+        Mixins.registerErrorHandlerClass(MixinErrorRecorder.class.getName());
+        Class.forName(MixinErrorRecorder.class.getName(), false, classLoader);
+    }
+
+    static void addConfiguration(String config, Path origin, int compatibility) {
         String name = origin != null ? origin.getFileName().toString() : "Hyinit";
         Mixins.addConfiguration(config, new MixinConfigSource(name));
         for (Config registered : Mixins.getConfigs()) {
@@ -302,6 +453,9 @@ public final class Main {
                                 .endsWith(".jar"))
                         .sorted()
                         .toList();
+            } catch (IOException e) {
+                throw new ConfigCollector.StartupValidationException(
+                        "Cannot read the early-plugin directory " + earlyPluginsDir + ": " + e);
             }
         }
 
@@ -325,7 +479,7 @@ public final class Main {
         return paths;
     }
 
-    private static void finishMixinBootstrapping() {
+    static void finishMixinBootstrapping() {
         try {
             Method m = MixinEnvironment.class.getDeclaredMethod("gotoPhase", MixinEnvironment.Phase.class);
             m.setAccessible(true);

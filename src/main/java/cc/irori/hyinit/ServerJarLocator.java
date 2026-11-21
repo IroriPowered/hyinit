@@ -6,11 +6,14 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.jar.JarFile;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 public final class ServerJarLocator {
@@ -130,16 +133,29 @@ public final class ServerJarLocator {
             return Optional.of(defaultJar);
         }
 
+        List<Path> candidates = new ArrayList<>();
+        Set<Path> realPaths = new HashSet<>();
         try (Stream<Path> s = Files.list(dir)) {
-            return s.filter(Files::isRegularFile)
+            List<Path> jars = s.filter(Files::isRegularFile)
                     .filter(p ->
                             p.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".jar"))
                     .sorted()
-                    .filter(ServerJarLocator::isHytaleServer)
-                    .findFirst();
+                    .toList();
+            for (Path jar : jars) {
+                if (!jar.equals(defaultJar) && isHytaleServer(jar) && realPaths.add(jar.toRealPath())) {
+                    candidates.add(jar);
+                }
+            }
         } catch (IOException e) {
             throw new IllegalArgumentException("Failed to scan directory for server jar: " + dir, e);
         }
+        if (candidates.size() > 1) {
+            throw new ConfigCollector.StartupValidationException("Found " + candidates.size() + " server JARs in "
+                    + dir + ": "
+                    + candidates.stream().map(p -> p.getFileName().toString()).collect(Collectors.joining(", "))
+                    + ". Keep one or choose one with --server-jar.");
+        }
+        return candidates.stream().findFirst();
     }
 
     private static boolean isHytaleServer(Path jarPath) {
@@ -149,7 +165,8 @@ public final class ServerJarLocator {
 
         try (JarFile jar = new JarFile(jarPath.toFile(), false)) {
             return jar.getJarEntry("manifests.json") != null;
-        } catch (IOException ignored) {
+        } catch (IOException e) {
+            HyinitLogger.get().warn("Failed to read " + jarPath, e);
             return false;
         }
     }

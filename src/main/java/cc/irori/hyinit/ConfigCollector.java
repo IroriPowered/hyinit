@@ -21,18 +21,23 @@ import java.util.jar.JarFile;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import javax.lang.model.SourceVersion;
+import org.objectweb.asm.ClassReader;
 
 public final class ConfigCollector {
+
+    private static final String HYINIT_ID = "IroriPowered:Hyinit";
+    private static final String JAVA_PLUGIN = "com/hypixel/hytale/server/core/plugin/JavaPlugin";
 
     // Private constructor to prevent instantiation
     private ConfigCollector() {}
 
-    public static Result collectMixinConfigs(Path workingDir, List<Path> earlyPluginDirs) {
+    public static Result collectMixinConfigs(Path workingDir, List<Path> earlyPluginDirs, Path selfJar) {
         Objects.requireNonNull(workingDir, "workingDir");
         Objects.requireNonNull(earlyPluginDirs, "earlyPluginDirs");
 
         Map<String, Boolean> enabledOverrides = readEnabledOverrides(workingDir);
-        List<String> warnings = new ArrayList<>();
+        List<Problem> warnings = new ArrayList<>();
+        List<Problem> failures = new ArrayList<>();
         Map<String, Path> origins = new LinkedHashMap<>();
         Map<String, byte[]> contents = new HashMap<>();
         Map<String, List<String>> namesByFile = new HashMap<>();
@@ -41,17 +46,19 @@ public final class ConfigCollector {
         Map<Path, Integer> mixinCompatibility = new HashMap<>();
         Set<Path> excludedJars = new HashSet<>();
         Set<Path> mixinsSkipped = new HashSet<>();
+        Map<Path, String> pluginIds = new HashMap<>();
+        Map<Path, String> versions = new HashMap<>();
         Set<Path> jars = new TreeSet<>();
 
         for (Path dir : earlyPluginDirs) {
             if (!Files.isDirectory(dir)) {
                 continue;
             }
-            for (Path jar : listJars(dir)) {
+            for (Path jar : listJars(dir, failures)) {
                 try {
                     jars.add(jar.toRealPath());
                 } catch (IOException e) {
-                    warnings.add("Failed to resolve " + jar + ": " + e.getMessage());
+                    failures.add(new Problem("Failed to resolve " + jar, jar, e));
                 }
             }
         }
@@ -64,11 +71,30 @@ public final class ConfigCollector {
 
                 JsonObject root = readJsonObject(jf, entry);
                 String id = pluginId(root);
-                // Hyxin's transformer starts a second Mixin service and fails on every class
+                if (!id.equals(":")) {
+                    pluginIds.put(jar, id);
+                }
+                String version = stringField(root, "Version");
+                if (!version.isEmpty()) {
+                    versions.put(jar, version);
+                }
                 if (id.equals("Build-9:Hyxin")) {
                     excludedJars.add(jar);
-                    warnings.add("Skipping " + jar
-                            + ". Hyinit loads Hyxin mods itself, so Hyxin is not needed and can be removed.");
+                    warnings.add(new Problem(
+                            "Skipping " + jar
+                                    + ". Hyinit loads Hyxin mods itself, so Hyxin is not needed and can be removed.",
+                            jar,
+                            null));
+                    continue;
+                }
+                if (jar.equals(selfJar) || id.equals(HYINIT_ID)) {
+                    excludedJars.add(jar);
+                    if (!jar.equals(selfJar)) {
+                        warnings.add(new Problem(
+                                "Skipping " + jar + ". It is another Hyinit JAR. Hyinit runs from " + selfJar + ".",
+                                jar,
+                                null));
+                    }
                     continue;
                 }
                 if (!id.equals(":")) {
@@ -76,7 +102,8 @@ public final class ConfigCollector {
                     if (owner != null) {
                         if (Files.mismatch(owner, jar) == -1) {
                             excludedJars.add(jar);
-                            warnings.add("Skipping " + jar + ". It is an identical copy of " + owner + ".");
+                            warnings.add(new Problem(
+                                    "Skipping " + jar + ". It is an identical copy of " + owner + ".", jar, null));
                             continue;
                         }
                         throw new StartupValidationException("Duplicate early plugin ID " + id + " in " + owner
@@ -84,19 +111,22 @@ public final class ConfigCollector {
                     }
                 }
 
-                if (hasMainClass(root)) {
+                if (hasPluginMain(jf, root)) {
                     jarsWithMainClass.add(jar);
                 }
 
                 try {
                     sharedPackages.put(jar, extractSharedPackages(root));
                 } catch (IllegalArgumentException e) {
-                    warnings.add("Ignoring HyinitSharedPackages in " + jar.getFileName() + ": " + e.getMessage());
+                    warnings.add(new Problem(
+                            "Ignoring HyinitSharedPackages in " + jar.getFileName() + ": " + e.getMessage(),
+                            jar,
+                            null));
                 }
 
                 Boolean enabled = enabledOverrides.get(id);
                 if (enabled != null ? !enabled : Boolean.TRUE.equals(booleanField(root, "DisabledByDefault"))) {
-                    warnings.add("Skipping mixins for disabled plugin " + id);
+                    warnings.add(new Problem("Skipping mixins for disabled plugin " + id, jar, null));
                     if (!extractMixinConfigs(root).isEmpty()) {
                         mixinsSkipped.add(jar);
                     }
@@ -115,8 +145,11 @@ public final class ConfigCollector {
                         mixinCompatibility.put(jar, compatibility);
                     }
                 } catch (IllegalArgumentException e) {
-                    warnings.add("Ignoring " + MixinCompatibility.MANIFEST_KEY + " in " + jar.getFileName() + ": "
-                            + e.getMessage());
+                    warnings.add(new Problem(
+                            "Ignoring " + MixinCompatibility.MANIFEST_KEY + " in " + jar.getFileName() + ": "
+                                    + e.getMessage(),
+                            jar,
+                            null));
                 }
 
                 List<String> found = extractMixinConfigs(root);
@@ -130,6 +163,12 @@ public final class ConfigCollector {
                     if (sameFile.stream().anyMatch(n -> origins.get(n).equals(jar))) continue;
                     JarEntry configEntry = jf.getJarEntry(normalized);
                     byte[] content = configEntry != null ? readBytes(jf, configEntry) : null;
+                    String missingMixin = content != null ? findMissingRequiredMixin(jf, content) : null;
+                    if (missingMixin != null) {
+                        throw new StartupValidationException("Mixin config " + normalized + " in " + jar
+                                + " requires " + missingMixin + ", which is not in that JAR. Update or remove "
+                                + jar.getFileName() + ".");
+                    }
                     if (sameFile.isEmpty()) {
                         register(normalized, jar, content, origins, contents);
                         sameFile.add(normalized);
@@ -141,9 +180,9 @@ public final class ConfigCollector {
                     if (content == null || !firstContainsIt) {
                         if (content != null) {
                             register(normalized, jar, content, origins, contents);
-                            warnings.add(listedElsewhere(normalized, first, jar));
+                            warnings.add(new Problem(listedElsewhere(normalized, first, jar), first, null));
                         } else if (firstContainsIt) {
-                            warnings.add(listedElsewhere(normalized, jar, first));
+                            warnings.add(new Problem(listedElsewhere(normalized, jar, first), jar, null));
                         }
                         continue;
                     }
@@ -157,13 +196,19 @@ public final class ConfigCollector {
                         }
                         register(alias, jar, content, origins, contents);
                         sameFile.add(alias);
-                        warnings.add(prefix + " has the same name as the one in " + first.getFileName()
-                                + "; it is applied as " + alias
-                                + ". Give each config a unique name, since parent configs are still looked up by"
-                                + " name.");
+                        warnings.add(new Problem(
+                                prefix + " has the same name as the one in " + first.getFileName()
+                                        + ". It is applied as " + alias
+                                        + ". Give each config a unique name, since parent configs are still looked up by"
+                                        + " name.",
+                                jar,
+                                null));
                     } else if (Arrays.equals(content, contents.get(blocker))) {
-                        warnings.add(prefix + " is identical to the one in "
-                                + origins.get(blocker).getFileName() + "; it is applied once.");
+                        warnings.add(new Problem(
+                                prefix + " is identical to the one in "
+                                        + origins.get(blocker).getFileName() + ". It is applied once.",
+                                jar,
+                                null));
                     } else {
                         throw new StartupValidationException("Mixin config " + normalized + " in " + jar
                                 + " has the same name as the one in " + origins.get(blocker)
@@ -173,9 +218,7 @@ public final class ConfigCollector {
             } catch (StartupValidationException e) {
                 throw e;
             } catch (Exception e) {
-                warnings.add("Failed to read " + jar.getFileName() + ": "
-                        + e.getClass().getSimpleName()
-                        + (e.getMessage() != null ? (": " + e.getMessage()) : ""));
+                failures.add(new Problem("Failed to read " + jar, jar, e));
             }
         }
 
@@ -187,7 +230,10 @@ public final class ConfigCollector {
                 Map.copyOf(mixinCompatibility),
                 Set.copyOf(excludedJars),
                 Set.copyOf(mixinsSkipped),
-                List.copyOf(warnings));
+                Map.copyOf(pluginIds),
+                Map.copyOf(versions),
+                List.copyOf(warnings),
+                List.copyOf(failures));
     }
 
     private static Map<String, Boolean> readEnabledOverrides(Path workingDir) {
@@ -239,7 +285,7 @@ public final class ConfigCollector {
         }
     }
 
-    private static List<Path> listJars(Path dir) {
+    private static List<Path> listJars(Path dir, List<Problem> failures) {
         try (Stream<Path> s = Files.list(dir)) {
             return s.filter(Files::isRegularFile)
                     .filter(p ->
@@ -247,6 +293,7 @@ public final class ConfigCollector {
                     .sorted()
                     .collect(Collectors.toList());
         } catch (IOException e) {
+            failures.add(new Problem("Failed to list " + dir, null, e));
             return List.of();
         }
     }
@@ -294,6 +341,26 @@ public final class ConfigCollector {
         return a != null && b != null && !a.equals(b) && !a.startsWith(b + ".") && !b.startsWith(a + ".");
     }
 
+    private static String findMissingRequiredMixin(JarFile jar, byte[] config) {
+        try {
+            JsonElement parsed = JsonParser.parseString(new String(config, StandardCharsets.UTF_8));
+            if (!parsed.isJsonObject()) return null;
+            JsonObject root = parsed.getAsJsonObject();
+            String mixinPackage = stringField(root, "package");
+            if (mixinPackage.isEmpty() || !Boolean.TRUE.equals(booleanField(root, "required"))) return null;
+            String prefix = mixinPackage.endsWith(".") ? mixinPackage : mixinPackage + ".";
+            for (String key : List.of("mixins", "server")) {
+                for (String name : readStringOrStringArray(root.get(key))) {
+                    String className = prefix + name;
+                    if (jar.getJarEntry(className.replace('.', '/') + ".class") == null) return className;
+                }
+            }
+            return null;
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
     private static String readMixinPackage(byte[] config) {
         try {
             JsonElement root = JsonParser.parseString(new String(config, StandardCharsets.UTF_8));
@@ -317,10 +384,22 @@ public final class ConfigCollector {
         return value != null && value.isJsonPrimitive() ? value.getAsString() : "";
     }
 
-    private static boolean hasMainClass(JsonObject root) {
-        return root.has("Main")
-                && root.get("Main").isJsonPrimitive()
-                && !root.get("Main").getAsString().isEmpty();
+    private static boolean hasPluginMain(JarFile jar, JsonObject root) throws IOException {
+        String name = stringField(root, "Main").replace('.', '/');
+        if (name.isEmpty()) return false;
+        Set<String> seen = new HashSet<>();
+        try {
+            while (seen.add(name)) {
+                JarEntry entry = jar.getJarEntry(name + ".class");
+                if (entry == null) return true;
+                name = new ClassReader(readBytes(jar, entry)).getSuperName();
+                if (name == null || name.equals("java/lang/Object")) return false;
+                if (name.equals(JAVA_PLUGIN)) return true;
+            }
+            return true;
+        } catch (RuntimeException e) {
+            return true;
+        }
     }
 
     private static Set<String> extractSharedPackages(JsonObject root) {
@@ -384,5 +463,10 @@ public final class ConfigCollector {
             Map<Path, Integer> mixinCompatibility,
             Set<Path> excludedJars,
             Set<Path> mixinsSkipped,
-            List<String> warnings) {}
+            Map<Path, String> pluginIds,
+            Map<Path, String> versions,
+            List<Problem> warnings,
+            List<Problem> failures) {}
+
+    public record Problem(String message, Path jar, Throwable cause) {}
 }

@@ -2,7 +2,8 @@
     "Group": "IroriPowered",
     "Name": "Hyinit",
     "Version": "${version}",
-    "Description": "Mixin launcher for Hytale servers. Launch the server with this JAR; do not install it as a plugin.",
+    "Description": "Mixin launcher for Hytale servers. Launch the server with this JAR or put it in an early-plugin directory. Do not install it in mods.",
+    "Website": "https://www.curseforge.com/hytale/bootstrap/hyinit",
     "Main": "cc.irori.hyinit.dummy.DummyPlugin",
     "Authors": [
         {

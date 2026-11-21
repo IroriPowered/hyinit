@@ -1,6 +1,7 @@
 package cc.irori.hyinit.mixin.impl;
 
 import cc.irori.hyinit.HyinitLogger;
+import cc.irori.hyinit.shared.DiagnosticsStore;
 import cc.irori.hyinit.shared.SourceMetaStore;
 import cc.irori.hyinit.shared.SourceMetadata;
 import cc.irori.hyinit.util.LoaderUtil;
@@ -69,9 +70,18 @@ public abstract class MixinPluginManager {
                     if (source.equals(LoaderUtil.normalizeExistingPath(loadedPath))) return null;
                 }
             }
+            if (metadata == null) {
+                Path original = SourceMetaStore.findIdenticalEarlyPlugin(source);
+                if (original != null) {
+                    HyinitLogger.get()
+                            .warn("Skipping " + path + ". It is an identical copy of " + original
+                                    + ", which is already loaded as a plugin.");
+                    return null;
+                }
+            }
             return this.loadPendingJavaPlugin(path);
         } catch (Exception e) {
-            System.err.println("[Hyinit] Failed to load plugin from " + path.getFileName() + ": " + e.getMessage());
+            HyinitLogger.get().error("Failed to load plugin from " + path.getFileName(), e);
             return null;
         }
     }
@@ -182,10 +192,10 @@ public abstract class MixinPluginManager {
             return original.call(self, identifier, inServerClassPath, urls);
         }
         if (SourceMetaStore.get(LoaderUtil.normalizeExistingPath(source)).mixinsSkipped()) {
-            HyinitLogger.get()
-                    .warn(
-                            "Mixins of " + identifier
-                                    + " were not applied at startup because it was disabled. Restart the server to apply them.");
+            String message = "Mixins of " + identifier
+                    + " were not applied at startup because it was disabled. Restart the server to apply them.";
+            HyinitLogger.get().warn(message);
+            DiagnosticsStore.addProblem(DiagnosticsStore.WARN, message, DiagnosticsStore.fileName(source), null);
         }
         this.lock.readLock().lock();
         try {

@@ -18,7 +18,6 @@
  */
 package cc.irori.hyinit.mixin;
 
-import cc.irori.hyinit.HyinitLogger;
 import cc.irori.hyinit.Main;
 import cc.irori.hyinit.util.UrlUtil;
 import java.io.ByteArrayInputStream;
@@ -254,6 +253,6 @@ public class HyinitMixinService
 
     @Override
     public ILogger getLogger(String name) {
-        return HyinitLogger.get();
+        return MixinProblemLogger.get();
     }
 }

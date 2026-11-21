@@ -1,0 +1,11 @@
+{
+    "required": true,
+    "minVersion": "0.8",
+    "package": "diagtest.mixin.ab",
+    "injectors": {
+        "defaultRequire": 1
+    },
+    "mixins": [
+        "OtherMixin"
+    ]
+}

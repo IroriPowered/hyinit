@@ -6,6 +6,7 @@ mixin = "0.17.5+mixin.0.8.7"
 mixinextras = "0.5.5"
 asm = "9.11.1"
 gson = "2.15.0"
+junit = "5.14.3"
 
 [libraries]
 hytale = { group = "com.hypixel.hytale", name = "Server", version.ref = "hytale" }
@@ -16,6 +17,9 @@ asm-analysis = { group = "org.ow2.asm", name = "asm-analysis", version.ref = "as
 asm-commons = { group = "org.ow2.asm", name = "asm-commons", version.ref = "asm" }
 asm-util = { group = "org.ow2.asm", name = "asm-util", version.ref = "asm" }
 gson = { group = "com.google.code.gson", name = "gson", version.ref = "gson" }
+junit-bom = { group = "org.junit", name = "junit-bom", version.ref = "junit" }
+junit-jupiter = { group = "org.junit.jupiter", name = "junit-jupiter" }
+junit-platform-launcher = { group = "org.junit.platform", name = "junit-platform-launcher" }
 
 [plugins]
 spotless = { id = "com.diffplug.spotless", version.ref = "spotless" }

@@ -148,6 +148,56 @@ def main():
         failed |= not check_started("config-listed-not-bundled", launch("config-listed-not-bundled", [
             (old, "startup.jar"), (ghost, "a-ghost.jar")]), warnings=("a-ghost.jar", "startup.jar", "is not in that JAR"))
 
+        broken = output / "startup-broken.jar"
+        broken_package = "local.hyinit.startup.broken"
+        jar(broken, None, {**startup_manifest, "Name": "Broken", "Mixins": ["broken.mixins.json"]},
+            {"broken.mixins.json": json.dumps({"required": True, "package": broken_package, "mixins": ["MixinGone"]})})
+        code, text, marker, _ = launch("config-missing-mixin", [(old, "startup.jar"), (broken, "broken.jar")])
+        errors = "\n".join(line for line in text.splitlines() if "Hyinit/ERROR" in line)
+        missing = [value for value in ("broken.mixins.json", "broken.jar", broken_package + ".MixinGone", "Update or remove")
+                   if value not in errors]
+        failed |= not check("config-missing-mixin", code == 1 and marker is None and not missing
+                            and "Exception" not in text and "HYINIT_STARTUP_REACHED_MAIN" not in text,
+                            "exit=%s marker=%s missing error identities=%s stack trace=%s"
+                            % (code, marker, missing, "Exception" in text))
+
+        absent_package = "local.hyinit.startup.absent"
+        absent_config = {"absent.mixins.json": json.dumps({"required": True, "minVersion": "0.8",
+                         "compatibilityLevel": "JAVA_21", "package": absent_package, "mixins": ["MixinAbsent"]})}
+        absent_manifest = {**startup_manifest, "Name": "Absent", "Mixins": ["absent.mixins.json"]}
+        absent, absent_legacy = output / "startup-absent.jar", output / "startup-absent-legacy.jar"
+        jar(absent, probe, absent_manifest, absent_config)
+        jar(absent_legacy, probe, {**absent_manifest, "HyinitMixinCompatibility": "0.17.0"}, absent_config)
+        absent_plugins = [(old, "startup.jar"), (absent, "absent.jar")]
+        code, text, marker, _ = launch("target-missing", absent_plugins)
+        last = (text.rstrip().splitlines() or [""])[-1]
+        missing = [value for value in ("Hyinit/ERROR", absent_package + ".Missing", "absent.mixins.json",
+                                       "Update or remove absent.jar") if value not in last]
+        failed |= not check("target-missing", code == 1 and marker is None and not missing,
+                            "exit=%s marker=%s missing in last line=%s" % (code, marker, missing))
+        code, text, marker, _ = launch("target-missing-legacy", [(old, "startup.jar"), (absent_legacy, "absent.jar")])
+        warned = absent_package + ".Missing" in text
+        failed |= not check("target-missing-legacy", code == 0 and marker == "started" and warned,
+                            "exit=%s marker=%s target named in output=%s" % (code, marker, warned))
+
+        blocked = output / "directory-unreadable" / "blocked"
+        blocked.mkdir(parents=True)
+        blocked.chmod(0)
+        try:
+            observed = None if os.access(blocked, os.R_OK) else launch(
+                "directory-unreadable", [(old, "startup.jar")], arguments=["--early-plugins", "blocked"])
+        finally:
+            blocked.chmod(0o755)
+        if observed:
+            code, text, marker, _ = observed
+            last = (text.rstrip().splitlines() or [""])[-1]
+            missing = [value for value in ("Hyinit/ERROR", "Cannot read the early-plugin directory", "blocked")
+                       if value not in last]
+            traced = "Failed to list" in text and "\tat " in text
+            failed |= not check("directory-unreadable", code == 1 and marker is None and not missing and traced,
+                                "exit=%s marker=%s missing in last line=%s warning with stack trace=%s"
+                                % (code, marker, missing, traced))
+
         supported = output / "startup-supported.jar"
         jar(supported, probe, {**startup_manifest, "HyinitMixinCompatibility": "0.17.5"}, mixins)
         failed |= not check_started("compatibility-supported", launch("compatibility-supported", [(supported, "startup.jar")]))
@@ -199,17 +249,86 @@ def main():
         failed |= not check("check-mixins-late", code == 1 and marker is None and not missing,
                             "exit=%s marker=%s missing error identities=%s" % (code, marker, missing))
 
+        optional = output / "startup-optional.jar"
+        jar(optional, probe, {**startup_manifest, "Name": "Optional", "Mixins": ["optional.mixins.json"]},
+            {"optional.mixins.json": json.dumps({**mixin_config, "package": late_package, "mixins": ["MixinLate"],
+                                                 "injectors": {}})})
+        optional_plugins = [(old, "startup.jar"), (optional, "optional.jar")]
+        code, text, marker, _ = launch("check-mixins-optional", optional_plugins, ["-Dmixin.debug.countInjections=false"],
+                                       arguments=["--check-mixins"])
+        failed |= not check("check-mixins-optional", code == 0 and marker is None and "Mixin target classes loaded" in text,
+                            "exit=%s marker=%s" % (code, marker))
+        code, text, marker, _ = launch("check-mixins-count", optional_plugins, arguments=["--check-mixins"])
+        errors = "\n".join(line for line in text.splitlines() if "Hyinit/ERROR" in line)
+        missing = [value for value in ("optional.jar", "com.hypixel.hytale.LateMain", "Mixin target classes failed")
+                   if value not in errors]
+        named = "methodThatDoesNotExist" in text
+        failed |= not check("check-mixins-count", code == 1 and marker is None and not missing and named,
+                            "exit=%s marker=%s missing error identities=%s injector named=%s"
+                            % (code, marker, missing, named))
+
+        early = output / "early-plugin-start"
+        (early / "earlyplugins").mkdir(parents=True)
+        (early / "earlyplugins/Hyinit.jar").write_bytes(hyinit.read_bytes())
+        (early / "earlyplugins/startup.jar").write_bytes(old.read_bytes())
+        code, text = run([java_home / "bin/java", "-Xmx512m", "-jar", server, "--accept-early-plugins", "--disable-sentry"],
+                         early, early / "runtime.log")
+        marker = (early / "startup-result.txt").is_file()
+        failed |= not check("early-plugin-start", code == 0 and marker and "Starting Hyinit from early plugin" in text,
+                            "exit=%s marker=%s" % (code, marker))
+
+        several = output / "server-several"
+        several.mkdir()
+        for name in ("server-a.jar", "server-b.jar"):
+            jar(several / name, None, None, {"manifests.json": "{}"})
+        code, text = run([java_home / "bin/java", "-Xmx512m", "-jar", hyinit, "--check-mixins"], several, several / "runtime.log")
+        errors = "\n".join(line for line in text.splitlines() if "Hyinit/ERROR" in line)
+        missing = [value for value in ("server-a.jar", "server-b.jar", "--server-jar") if value not in errors]
+        failed |= not check("server-several", code == 1 and not missing, "exit=%s missing error identities=%s" % (code, missing))
+
+        renamed = output / "server-renamed"
+        renamed.mkdir()
+        (renamed / "server.jar").symlink_to(server)
+        (renamed / "server-link.jar").symlink_to(renamed / "server.jar")
+        code, text = run([java_home / "bin/java", "-Xmx512m", "-jar", hyinit, "--check-mixins"], renamed, renamed / "runtime.log")
+        failed |= not check("server-renamed", code == 0 and "Mixin target classes loaded" in text, "exit=%s" % code)
+
         runtime = output / "server-start"
-        runtime.mkdir()
+        transformer_name = "local.hyinit.transformer.Passthrough"
+        transformer = compile_java("transformer", [write_source("transformer/Passthrough.java",
+            "package local.hyinit.transformer; public class Passthrough implements"
+            " com.hypixel.hytale.plugin.early.ClassTransformer {"
+            " public byte[] transform(String name, String path, byte[] bytes) { return null; } }")])
+        (runtime / "earlyplugins").mkdir(parents=True)
+        jar(runtime / "earlyplugins/transformer.jar", transformer,
+            {"Group": "LocalVerification", "Name": "Transformer", "Version": "1.0.0", "Main": transformer_name},
+            {"META-INF/services/com.hypixel.hytale.plugin.early.ClassTransformer": transformer_name + "\n"})
+        copied = compile_java("copied", [write_source("copied/CopiedPlugin.java",
+            "package local.hyinit.copied; public class CopiedPlugin extends"
+            " com.hypixel.hytale.server.core.plugin.JavaPlugin {"
+            " public CopiedPlugin(com.hypixel.hytale.server.core.plugin.JavaPluginInit init) { super(init); } }")])
+        jar(runtime / "earlyplugins/copied.jar", copied,
+            {"Group": "LocalVerification", "Name": "Copied", "Version": "1.0.0", "Main": "local.hyinit.copied.CopiedPlugin"})
+        (runtime / "mods").mkdir()
+        (runtime / "mods/copied.jar").write_bytes((runtime / "earlyplugins/copied.jar").read_bytes())
+        jar(runtime / "earlyplugins/badmanifest.jar", None, None, {"manifest.json": "{not json"})
         code, text = run([java_home / "bin/java", "-Xmx1g", "-jar", hyinit, "--server-jar", server,
                           "--accept-early-plugins", "--disable-sentry"], runtime, runtime / "runtime.log")
         problems = [line for line in text.splitlines() if any(token in line for token in (
             "Hyinit/ERROR", "InvalidInjectionException", "Critical injection failure", "MixinApplyError",
-            "NoSuchMethodError", "NoClassDefFoundError", "ClassCastException", "LinkageError"))]
+            "NoSuchMethodError", "NoClassDefFoundError", "ClassCastException", "LinkageError",
+            "Tried to load duplicate plugin"))]
         reached = "Loading pending classpath plugins!" in text
-        replayed = any("Mixin config(s)" in path.read_text(errors="replace") for path in (runtime / "logs").rglob("*.log"))
-        failed |= not check("server-start", reached and replayed and not problems,
-                            "reached plugin loading=%s launcher lines in log file=%s problems=%s" % (reached, replayed, problems[:3]))
+        logs = [path.read_text(errors="replace") for path in (runtime / "logs").rglob("*.log")]
+        replayed = any("Mixin config(s)" in log and "FINE] [Hyinit]" not in log and "FINEST] [Hyinit]" not in log
+                       for log in logs)
+        traced = any("Failed to read " in log and "badmanifest.jar" in log and "\tat " in log for log in logs)
+        printed = sum("Mixin config(s)" in line for line in text.splitlines())
+        skipped = any("identical copy" in line and "copied.jar" in line for line in text.splitlines())
+        failed |= not check("server-start", reached and replayed and traced and printed == 1 and skipped and not problems,
+                            "reached plugin loading=%s launcher lines in log file=%s launcher stack trace in log file=%s"
+                            " launcher lines on console=%s identical mods copy skipped=%s problems=%s"
+                            % (reached, replayed, traced, printed, skipped, problems[:3]))
 
         result["status"] = "failed" if failed else "passed"
         return 1 if failed else 0

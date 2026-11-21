@@ -49,6 +49,10 @@ dependencies {
     implementation(libs.asm.tree)
     implementation(libs.gson)
 
+    testImplementation(platform(libs.junit.bom))
+    testImplementation(libs.junit.jupiter)
+    testRuntimeOnly(libs.junit.platform.launcher)
+
     constraints {
         implementation(libs.asm.analysis)
         implementation(libs.asm.commons)
@@ -82,6 +86,16 @@ tasks {
 
     compileJava {
         options.encoding = "UTF-8"
+    }
+
+    compileTestJava {
+        options.encoding = "UTF-8"
+    }
+
+    test {
+        useJUnitPlatform()
+        forkEvery = 1
+        systemProperty("hyinit.projectVersion", projectVersion)
     }
 
     shadowJar {

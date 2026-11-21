@@ -1,7 +1,9 @@
 package cc.irori.hyinit.shared;
 
 import cc.irori.hyinit.util.LoaderUtil;
+import java.io.IOException;
 import java.net.URL;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.CodeSource;
 import java.util.Map;
@@ -42,6 +44,22 @@ public final class SourceMetaStore {
 
     public static void setSkippedJars(Set<Path> jars) {
         skippedJars = jars;
+    }
+
+    public static Path findIdenticalEarlyPlugin(Path jar) throws IOException {
+        long size = Files.size(jar);
+        for (Map.Entry<Path, SourceMetadata> entry : META_MAP.entrySet()) {
+            SourceMetadata metadata = entry.getValue();
+            Path source = entry.getKey();
+            if (metadata.isEarlyPlugin()
+                    && metadata.hasMainClass()
+                    && Files.isRegularFile(source)
+                    && Files.size(source) == size
+                    && Files.mismatch(source, jar) == -1) {
+                return source;
+            }
+        }
+        return null;
     }
 
     public static boolean isSkipped(Path jar) {
