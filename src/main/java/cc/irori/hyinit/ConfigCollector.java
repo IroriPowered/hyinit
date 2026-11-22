@@ -140,7 +140,7 @@ public final class ConfigCollector {
                             throw new StartupValidationException(jar + " declares " + MixinCompatibility.MANIFEST_KEY
                                     + " " + MixinCompatibility.format(compatibility)
                                     + ", but this Hyinit supports Fabric Mixin "
-                                    + MixinCompatibility.format(MixinCompatibility.LATEST) + "; update Hyinit.");
+                                    + MixinCompatibility.format(MixinCompatibility.LATEST) + ". Update Hyinit.");
                         }
                         mixinCompatibility.put(jar, compatibility);
                     }

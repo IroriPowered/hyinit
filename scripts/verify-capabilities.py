@@ -21,6 +21,8 @@ def main():
     parser.add_argument("--java-home", required=True, type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--timeout", type=int, default=120)
+    parser.add_argument("--early-plugin", action="store_true",
+                        help="Start the server JAR with Hyinit in earlyplugins instead of the Hyinit launcher.")
     args = parser.parse_args()
     if args.timeout <= 0:
         parser.error("--timeout must be positive")
@@ -79,12 +81,24 @@ def main():
             plugins = runtime / "earlyplugins"
             plugins.mkdir()
             shutil.copy2(legacy_helper if mode == "legacy" else helper, plugins / helper.name)
+            if args.early_plugin:
+                shutil.copy2(hyinit, plugins / "Hyinit.jar")
+                launch = ["-jar", server]
+            else:
+                launch = ["-jar", hyinit, "--server-jar", server]
             command = [java_home / "bin/java", "-Xmx768m", "-Xverify:all", "-XX:ActiveProcessorCount=2",
                        "-XX:MaxDirectMemorySize=128m", "-Djava.awt.headless=true",
                        "-Dmixin.debug.export=true", "-Dmixin.debug.countInjections=true",
                        "-Dhyinit.capabilities.mode=" + mode,
-                       "-jar", hyinit, "--server-jar", server, "--accept-early-plugins", "--disable-sentry"]
+                       *launch, "--accept-early-plugins", "--disable-sentry"]
             code, text = run(command, runtime, runtime / "runtime.log")
+            if args.early_plugin:
+                early_start = "[Hyinit] Starting Hyinit from early plugin "
+                using = text.find("Using server jar: ")
+                if text.count(early_start) != 1 or using < 0 or using < text.find(early_start):
+                    raise RuntimeError(mode + " did not start Hyinit through the early-plugin route: " + text[-16000:])
+                result.setdefault("earlyStart", {})[mode] = next(
+                    line for line in text.splitlines() if early_start in line)
             passed = runtime / "capabilities-passed.txt"
             if mode == "positive":
                 if code or not passed.is_file() or "HYINIT_CAPABILITIES_PASS" not in text:

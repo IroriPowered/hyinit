@@ -17,7 +17,7 @@
 | `Duplicate early plugin ID <Group:Name> in <jar> and <jar>. Remove one of the JARs.` | See [Duplicate plugins](/mod/hyinit/installing-hyinit#duplicate-plugins). |
 | `Skipping <jar>. Hyinit loads Hyxin mods itself, so Hyxin is not needed and can be removed.` | Warning. |
 | `Cannot read the early-plugin directory <directory>: <error>` | Make the directory readable by the user that runs the server. |
-| `<jar> declares HyinitMixinCompatibility <version>, but this Hyinit supports Fabric Mixin <latest>; update Hyinit.` | Update Hyinit, or disable the plugin until you can. |
+| `<jar> declares HyinitMixinCompatibility <version>, but this Hyinit supports Fabric Mixin <latest>. Update Hyinit.` | Update Hyinit, or disable the plugin until you can. |
 | `Mixins of <plugin> were not applied at startup because it was disabled. Restart the server to apply them.` | Warning. |
 | `<jar> and <jar> contain different versions of <count> classes (<class>, <class>). ...` | Warning. Usually an unrelocated shaded library. Remove one JAR or ask its author to relocate the library. |
 | `<count> conflicting early plugin JAR pair(s) found and -Dhyinit.failOnClassConflicts=true is set. See the errors above.` | Resolve each conflict above, or remove the option. |

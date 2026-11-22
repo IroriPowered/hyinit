@@ -11,18 +11,19 @@ scripts_dir=$(cd "$(dirname "$0")" && pwd)
 
 status=0
 run() {
-    local check=$1
-    shift
-    echo "== $check"
+    local name=$1 check=$2
+    shift 2
+    echo "== $name"
     if ! python3 "$scripts_dir/verify-$check.py" --hyinit-jar "$hyinit_jar" --server-jar "$server_jar" \
-        --java-home "$java_home" --output-dir "$output_dir/verify-$check" "$@"; then
+        --java-home "$java_home" --output-dir "$output_dir/verify-$name" "$@"; then
         status=1
     fi
 }
 for check in startup capabilities loader-ownership; do
-    run "$check"
+    run "$check" "$check"
 done
+run capabilities-early-plugin capabilities --early-plugin
 if [ -n "$assets" ]; then
-    run native-reload --assets "$assets"
+    run native-reload native-reload --assets "$assets"
 fi
 exit $status
