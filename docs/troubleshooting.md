@@ -36,3 +36,4 @@
 | `<failed> of <total> Mixin target classes failed: <class>, <class>` | `--check-mixins` exits with status 1. The errors above show why each class failed. Update or remove the JAR with the failing Mixin. |
 | `Loading <class> failed` | From `--check-mixins`. The stack trace that follows shows why. |
 | `Mixin target <class> was not found.` | Warning from `--check-mixins`. Not counted as a failure. |
+| `Hyinit could not patch <class>: <effect>` | Warning. This Hytale version changed a method Hyinit patches for a minor feature. The server starts without it. Update Hyinit. |

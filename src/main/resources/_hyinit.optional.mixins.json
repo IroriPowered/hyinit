@@ -1,0 +1,12 @@
+{
+    "required": false,
+    "minVersion": "0.8",
+    "package": "cc.irori.hyinit.mixin.impl.optional",
+    "injectors": {
+        "defaultRequire": 0
+    },
+    "mixins": [
+        "MixinHytaleServer",
+        "MixinLateMain"
+    ]
+}

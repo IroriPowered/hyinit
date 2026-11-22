@@ -1,4 +1,4 @@
-package cc.irori.hyinit.mixin.impl;
+package cc.irori.hyinit.mixin.impl.optional;
 
 import com.hypixel.hytale.server.core.HytaleServer;
 import com.llamalad7.mixinextras.injector.ModifyExpressionValue;
@@ -13,8 +13,7 @@ public class MixinHytaleServer {
             at =
                     @At(
                             value = "INVOKE",
-                            target = "Lcom/hypixel/hytale/plugin/early/EarlyPluginLoader;hasTransformers()Z"),
-            require = 1)
+                            target = "Lcom/hypixel/hytale/plugin/early/EarlyPluginLoader;hasTransformers()Z"))
     private boolean hyinit$treatAsModded(boolean original) {
         return true;
     }

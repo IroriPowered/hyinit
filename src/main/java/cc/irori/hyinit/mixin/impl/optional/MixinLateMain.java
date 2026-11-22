@@ -1,4 +1,4 @@
-package cc.irori.hyinit.mixin.impl;
+package cc.irori.hyinit.mixin.impl.optional;
 
 import cc.irori.hyinit.mixin.HyinitClassLoader;
 import cc.irori.hyinit.util.ReflectionUtil;

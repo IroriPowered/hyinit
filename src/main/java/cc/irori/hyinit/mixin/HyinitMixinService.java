@@ -26,9 +26,11 @@ import java.io.InputStream;
 import java.net.URL;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.tree.ClassNode;
+import org.spongepowered.asm.launch.platform.MixinPlatformAgentDefault;
 import org.spongepowered.asm.launch.platform.container.ContainerHandleURI;
 import org.spongepowered.asm.launch.platform.container.IContainerHandle;
 import org.spongepowered.asm.logging.ILogger;
@@ -36,15 +38,14 @@ import org.spongepowered.asm.mixin.MixinEnvironment;
 import org.spongepowered.asm.mixin.transformer.IMixinTransformer;
 import org.spongepowered.asm.mixin.transformer.IMixinTransformerFactory;
 import org.spongepowered.asm.service.*;
-import org.spongepowered.asm.util.ReEntranceLock;
+import org.spongepowered.asm.util.IConsumer;
 
-public class HyinitMixinService
-        implements IMixinService, IClassProvider, IClassBytecodeProvider, ITransformerProvider, IClassTracker {
-
-    private final ReEntranceLock lock = new ReEntranceLock(1);
+public class HyinitMixinService extends MixinServiceAbstract
+        implements IClassProvider, IClassBytecodeProvider, ITransformerProvider, IClassTracker {
 
     private static HyinitClassLoader gameClassLoader;
     private static IMixinTransformer transformer;
+    private static IConsumer<MixinEnvironment.Phase> phaseConsumer;
     private static Map<String, byte[]> configContents = Map.of();
 
     public static void setGameClassLoader(HyinitClassLoader loader) {
@@ -123,11 +124,6 @@ public class HyinitMixinService
     }
 
     @Override
-    public MixinEnvironment.Phase getInitialPhase() {
-        return MixinEnvironment.Phase.PREINIT;
-    }
-
-    @Override
     public void offer(IMixinInternal internal) {
         if (internal instanceof IMixinTransformerFactory factory) {
             transformer = factory.createTransformer();
@@ -135,20 +131,14 @@ public class HyinitMixinService
     }
 
     @Override
-    public void init() {}
+    @Deprecated
+    public void wire(MixinEnvironment.Phase phase, IConsumer<MixinEnvironment.Phase> consumer) {
+        super.wire(phase, consumer);
+        phaseConsumer = consumer;
+    }
 
-    @Override
-    public void prepare() {}
-
-    @Override
-    public void beginPhase() {}
-
-    @Override
-    public void checkEnv(Object bootSource) {}
-
-    @Override
-    public ReEntranceLock getReEntranceLock() {
-        return lock;
+    public static void gotoPhase(MixinEnvironment.Phase phase) {
+        phaseConsumer.accept(phase);
     }
 
     @Override
@@ -189,7 +179,7 @@ public class HyinitMixinService
 
     @Override
     public Collection<String> getPlatformAgents() {
-        return Collections.singletonList("org.spongepowered.asm.launch.platform.MixinPlatformAgentDefault");
+        return List.of(MixinPlatformAgentDefault.class.getName(), HyinitPlatformAgent.class.getName());
     }
 
     @Override
@@ -235,11 +225,6 @@ public class HyinitMixinService
 
     @Override
     public void addTransformerExclusion(String name) {}
-
-    @Override
-    public String getSideName() {
-        return "SERVER";
-    }
 
     @Override
     public MixinEnvironment.CompatibilityLevel getMinCompatibilityLevel() {

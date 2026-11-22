@@ -8,8 +8,6 @@
     "mixins": [
         "MixinEarlyPluginLoader",
         "MixinHytaleLogger",
-        "MixinHytaleServer",
-        "MixinLateMain",
         "MixinMain",
         "MixinPluginClassLoader",
         "MixinPluginManager",

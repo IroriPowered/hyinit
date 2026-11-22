@@ -23,6 +23,7 @@ import java.util.stream.Collectors;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.spongepowered.asm.launch.MixinBootstrap;
+import org.spongepowered.asm.mixin.MixinEnvironment;
 import org.spongepowered.asm.mixin.Mixins;
 import org.spongepowered.asm.mixin.transformer.Config;
 
@@ -102,6 +103,13 @@ class MixinDiagnosticsTest {
 
     private static Set<Map<String, String>> lookup(String method) {
         return Set.copyOf(HyinitDiagnostics.mixinsFor(TARGET, method));
+    }
+
+    @Test
+    void bootstrapEndsInDefaultPhaseOnServerSide() {
+        MixinEnvironment environment = MixinEnvironment.getCurrentEnvironment();
+        assertEquals(MixinEnvironment.Phase.DEFAULT, environment.getPhase());
+        assertEquals(MixinEnvironment.Side.SERVER, environment.getSide());
     }
 
     @Test

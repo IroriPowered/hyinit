@@ -13,8 +13,6 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
- *
- * finishMixinBootstrapping is modified from Fabric Loader's net/fabricmc/loader/impl/launch/FabricLauncherBase.java for Hyinit.
  */
 package cc.irori.hyinit;
 
@@ -24,6 +22,7 @@ import cc.irori.hyinit.mixin.HyinitMixinService;
 import cc.irori.hyinit.mixin.MixinCompatibility;
 import cc.irori.hyinit.mixin.MixinErrorRecorder;
 import cc.irori.hyinit.mixin.MixinOriginExtension;
+import cc.irori.hyinit.mixin.OptionalPatchCheck;
 import cc.irori.hyinit.shared.DiagnosticsStore;
 import cc.irori.hyinit.shared.SourceMetaStore;
 import cc.irori.hyinit.shared.SourceMetadata;
@@ -38,7 +37,6 @@ import java.io.Reader;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
-import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -243,6 +241,7 @@ public final class Main {
         }
 
         addConfiguration("_hyinit.mixins.json", selfJar, MixinCompatibility.LATEST);
+        addConfiguration("_hyinit.optional.mixins.json", selfJar, MixinCompatibility.LATEST);
 
         List<Config> registered = List.copyOf(Mixins.getConfigs());
         HyinitClassLoader.setMixinConfigs(registered);
@@ -408,7 +407,9 @@ public final class Main {
 
     static void installDiagnostics(HyinitClassLoader classLoader, List<Config> registered)
             throws ClassNotFoundException {
-        ((Extensions) HyinitMixinService.getTransformer().getExtensions()).add(new MixinOriginExtension(registered));
+        Extensions extensions = (Extensions) HyinitMixinService.getTransformer().getExtensions();
+        extensions.add(new MixinOriginExtension(registered));
+        extensions.add(new OptionalPatchCheck());
         Mixins.registerErrorHandlerClass(MixinErrorRecorder.class.getName());
         Class.forName(MixinErrorRecorder.class.getName(), false, classLoader);
     }
@@ -480,13 +481,7 @@ public final class Main {
     }
 
     static void finishMixinBootstrapping() {
-        try {
-            Method m = MixinEnvironment.class.getDeclaredMethod("gotoPhase", MixinEnvironment.Phase.class);
-            m.setAccessible(true);
-            m.invoke(null, MixinEnvironment.Phase.INIT);
-            m.invoke(null, MixinEnvironment.Phase.DEFAULT);
-        } catch (Exception e) {
-            throw new RuntimeException(e);
-        }
+        HyinitMixinService.gotoPhase(MixinEnvironment.Phase.INIT);
+        HyinitMixinService.gotoPhase(MixinEnvironment.Phase.DEFAULT);
     }
 }
