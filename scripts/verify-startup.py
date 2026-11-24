@@ -179,6 +179,12 @@ def main():
         warned = absent_package + ".Missing" in text
         failed |= not check("target-missing-legacy", code == 0 and marker == "started" and warned,
                             "exit=%s marker=%s target named in output=%s" % (code, marker, warned))
+        code, text, marker, _ = launch("check-mixins-target-missing", absent_plugins, arguments=["--check-mixins"])
+        last = (text.rstrip().splitlines() or [""])[-1]
+        missing = [value for value in ("Hyinit/ERROR", absent_package + ".Missing", "Update or remove absent.jar")
+                   if value not in last]
+        failed |= not check("check-mixins-target-missing", code == 1 and not missing and "Re-entrance" not in text,
+                            "exit=%s missing in last line=%s re-entrance=%s" % (code, missing, "Re-entrance" in text))
 
         blocked = output / "directory-unreadable" / "blocked"
         blocked.mkdir(parents=True)

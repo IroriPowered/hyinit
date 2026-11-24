@@ -66,6 +66,7 @@ import org.spongepowered.asm.mixin.extensibility.IMixinConfigSource;
 import org.spongepowered.asm.mixin.transformer.Config;
 import org.spongepowered.asm.mixin.transformer.ext.Extensions;
 import org.spongepowered.asm.mixin.transformer.throwables.InvalidMixinException;
+import org.spongepowered.asm.service.MixinService;
 
 public final class Main {
 
@@ -272,24 +273,38 @@ public final class Main {
         thread.start();
         thread.join();
         if (failure[0] != null) {
-            for (Throwable cause = failure[0]; cause != null; cause = cause.getCause()) {
-                if (cause instanceof InvalidMixinException invalid) {
-                    String jar = invalid.getMixin() == null
-                            ? null
-                            : FabricUtil.getModId(invalid.getMixin().getConfig(), null);
-                    throw new ConfigCollector.StartupValidationException(
-                            invalid.getMessage() + (jar == null ? "." : ". Update or remove " + jar + "."));
-                }
+            String message = invalidMixinMessage(failure[0]);
+            if (message != null) {
+                throw new ConfigCollector.StartupValidationException(message);
             }
             throw SneakyThrow.sneakyThrow(failure[0]);
         }
     }
 
+    private static String invalidMixinMessage(Throwable failure) {
+        for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
+            if (cause instanceof InvalidMixinException invalid) {
+                String jar = invalid.getMixin() == null
+                        ? null
+                        : FabricUtil.getModId(invalid.getMixin().getConfig(), null);
+                return invalid.getMessage() + (jar == null ? "." : ". Update or remove " + jar + ".");
+            }
+        }
+        return null;
+    }
+
     private static boolean checkMixins(HyinitClassLoader classLoader, List<Config> configs) {
         Thread.currentThread().setContextClassLoader(classLoader);
         Set<String> failed = new TreeSet<>();
-        if (!loads(classLoader, HYTALE_MAIN)) {
+        Throwable mainFailure = load(classLoader, HYTALE_MAIN);
+        if (mainFailure != null) {
             failed.add(HYTALE_MAIN);
+        }
+        if (MixinService.getService().getReEntranceLock().getDepth() > 0) {
+            String message = invalidMixinMessage(mainFailure);
+            LOGGER.error(
+                    message != null ? message : "Mixin could not prepare the Mixin configs. See the errors above.");
+            return false;
         }
         Set<String> targets = new TreeSet<>();
         targets.add(HYTALE_MAIN);
@@ -297,7 +312,7 @@ public final class Main {
             targets.addAll(config.getConfig().getTargets());
         }
         for (String target : targets) {
-            if (!target.equals(HYTALE_MAIN) && !loads(classLoader, target)) {
+            if (!target.equals(HYTALE_MAIN) && load(classLoader, target) != null) {
                 failed.add(target);
             }
         }
@@ -310,21 +325,25 @@ public final class Main {
         return false;
     }
 
-    private static boolean loads(ClassLoader classLoader, String name) {
+    private static Throwable load(ClassLoader classLoader, String name) {
         try {
             Class.forName(name, false, classLoader);
-            return true;
+            return null;
         } catch (ClassNotFoundException e) {
+            if (e.getCause() instanceof LinkageError) {
+                LOGGER.error("Loading " + name + " failed", e);
+                return e;
+            }
             LOGGER.warn("Mixin target " + name + " was not found.");
-            return true;
+            return null;
         } catch (LinkageError e) {
             LOGGER.error("Loading " + name + " failed", e);
-            return false;
+            return e;
         } catch (HyinitClassLoader.TransformationException e) {
-            return false;
+            return e;
         } catch (RuntimeException e) {
             LOGGER.error("Loading " + name + " failed", e);
-            return false;
+            return e;
         }
     }
 

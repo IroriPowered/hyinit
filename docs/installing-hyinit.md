@@ -60,6 +60,8 @@ Use the path to your Hyinit JAR if it is not in `earlyplugins`.
 
 It loads every target class and exits with status 1 if a class fails to load or an injector matches nothing, even one without `require`. Add `-Dmixin.debug.countInjections=false` before `-jar` to skip the injector check.
 
+When a required Mixin config cannot be prepared, for example because a target class is missing, the check stops at that error. Its last line names the JAR to update or remove.
+
 The check does not:
 
 - Run static initialisers or native transformers.
