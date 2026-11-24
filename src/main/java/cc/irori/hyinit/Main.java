@@ -292,11 +292,12 @@ public final class Main {
             failed.add(HYTALE_MAIN);
         }
         Set<String> targets = new TreeSet<>();
+        targets.add(HYTALE_MAIN);
         for (Config config : configs) {
             targets.addAll(config.getConfig().getTargets());
         }
         for (String target : targets) {
-            if (!loads(classLoader, target)) {
+            if (!target.equals(HYTALE_MAIN) && !loads(classLoader, target)) {
                 failed.add(target);
             }
         }
