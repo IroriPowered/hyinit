@@ -40,4 +40,7 @@ public abstract class TargetMixin {
     public String replaced() {
         return "overwritten";
     }
+
+    @Inject(method = "line(I)I", at = @At("RETURN"))
+    private void diag$line(int x, CallbackInfoReturnable<Integer> cir) {}
 }

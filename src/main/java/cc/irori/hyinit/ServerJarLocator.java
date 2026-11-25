@@ -18,7 +18,6 @@ import java.util.stream.Stream;
 
 public final class ServerJarLocator {
 
-    private static final String[] SERVER_JAR_KEYS = {"--server-jar", "--serverJar"};
     private static final String DEFAULT_SERVER_JAR = "HytaleServer.jar";
 
     // Private constructor to prevent instantiation
@@ -27,12 +26,13 @@ public final class ServerJarLocator {
     public static Path locate(String[] args) {
         Objects.requireNonNull(args, "args");
 
-        Optional<Path> parsed = parseServerJarArg(args);
-        if (parsed.isPresent()) {
-            if (!Files.isRegularFile(parsed.get())) {
-                throw new ConfigCollector.StartupValidationException("Server JAR not found: " + parsed.get());
+        String parsed = LauncherOptions.value(args, LauncherOptions.SERVER_JAR, LauncherOptions.SERVER_JAR_ALIAS);
+        if (parsed != null && !parsed.isEmpty()) {
+            Path jar = Paths.get(parsed);
+            if (!Files.isRegularFile(jar)) {
+                throw new ConfigCollector.StartupValidationException("Server JAR not found: " + jar);
             }
-            return parsed.get();
+            return jar;
         }
 
         Path cwd = Paths.get("").toAbsolutePath().normalize();
@@ -72,48 +72,8 @@ public final class ServerJarLocator {
         return null;
     }
 
-    private static Optional<Path> parseServerJarArg(String[] args) {
-        for (int i = 0; i < args.length; i++) {
-            String a = args[i];
-
-            // --server-jar=<path> / --serverJar=<path>
-            for (String key : SERVER_JAR_KEYS) {
-                String prefix = key + "=";
-                if (a.startsWith(prefix) && a.length() > prefix.length()) {
-                    return Optional.of(Paths.get(a.substring(prefix.length())));
-                }
-            }
-
-            // --server-jar <path> / --serverJar <path>
-            if (isServerJarKey(a) && i + 1 < args.length) {
-                return Optional.of(Paths.get(args[i + 1]));
-            }
-        }
-
-        return Optional.empty();
-    }
-
-    private static boolean isServerJarKey(String arg) {
-        for (String key : SERVER_JAR_KEYS) {
-            if (key.equals(arg)) return true;
-        }
-        return false;
-    }
-
     public static String[] buildServerArgs(String[] args, List<Path> earlyPluginDirs) {
-        List<String> serverArgs = new ArrayList<>(args.length + (earlyPluginDirs.isEmpty() ? 0 : 1));
-        for (int i = 0; i < args.length; i++) {
-            String arg = args[i];
-            if (isServerJarKey(arg) || arg.equals("--early-plugins")) {
-                if (i + 1 < args.length) {
-                    i++;
-                }
-            } else if (!arg.startsWith("--server-jar=")
-                    && !arg.startsWith("--serverJar=")
-                    && !arg.startsWith("--early-plugins=")) {
-                serverArgs.add(arg);
-            }
-        }
+        List<String> serverArgs = LauncherOptions.hytaleArgs(args);
         if (!earlyPluginDirs.isEmpty()) {
             StringBuilder earlyPluginsArg = new StringBuilder("--early-plugins=");
             for (int i = 0; i < earlyPluginDirs.size(); i++) {

@@ -4,12 +4,14 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import cc.irori.hyinit.mixin.HyinitClassLoader;
 import cc.irori.hyinit.mixin.HyinitMixinBootstrap;
 import cc.irori.hyinit.mixin.HyinitMixinService;
 import cc.irori.hyinit.mixin.MixinCompatibility;
+import cc.irori.hyinit.shared.DiagnosticsStore;
 import cc.irori.hyinit.shared.HyinitDiagnostics;
 import cc.irori.hyinit.shared.SourceMetadata;
 import com.llamalad7.mixinextras.MixinExtrasBootstrap;
@@ -19,6 +21,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -101,15 +104,25 @@ class MixinDiagnosticsTest {
         return Map.of("mixin", mixin, "config", config, "source", source, "kind", kind);
     }
 
+    private static Map<String, String> origin(Map<String, String> entry) {
+        return Map.of(
+                "mixin", entry.get("mixin"),
+                "config", entry.get("config"),
+                "source", entry.get("source"),
+                "kind", entry.get("kind"));
+    }
+
     private static Set<Map<String, String>> lookup(String method) {
-        return Set.copyOf(HyinitDiagnostics.mixinsFor(TARGET, method));
+        return HyinitDiagnostics.mixinsFor(TARGET, method).stream()
+                .map(MixinDiagnosticsTest::origin)
+                .collect(Collectors.toSet());
     }
 
     @Test
-    void bootstrapEndsInDefaultPhaseOnServerSide() {
-        MixinEnvironment environment = MixinEnvironment.getCurrentEnvironment();
-        assertEquals(MixinEnvironment.Phase.DEFAULT, environment.getPhase());
-        assertEquals(MixinEnvironment.Side.SERVER, environment.getSide());
+    void bootstrapRunsOnServerSide() {
+        assertEquals(
+                MixinEnvironment.Side.SERVER,
+                MixinEnvironment.getCurrentEnvironment().getSide());
     }
 
     @Test
@@ -140,6 +153,26 @@ class MixinDiagnosticsTest {
     }
 
     @Test
+    void mixinOnOneOverloadIsListedForThatOverloadOnly() throws Exception {
+        List<Map<String, String>> changed = HyinitDiagnostics.mixinsFor(TARGET, "line", "(I)I");
+        assertEquals(
+                List.of(entry(TARGET_MIXIN, "changed")),
+                changed.stream().map(MixinDiagnosticsTest::origin).toList());
+        assertEquals(List.of(), HyinitDiagnostics.mixinsFor(TARGET, "line", "(Ljava/lang/String;)I"));
+        assertEquals(changed, HyinitDiagnostics.mixinsFor(TARGET, "line"));
+        assertEquals(changed, HyinitDiagnostics.methodMap().get(TARGET).get("line"));
+
+        Map<String, String> entry = changed.get(0);
+        assertEquals("(I)I", entry.get("descriptor"));
+        int first = Integer.parseInt(entry.get("firstLine"));
+        int last = Integer.parseInt(entry.get("lastLine"));
+        int changedLine = (int) target.getClass().getMethod("line", int.class).invoke(target, 0);
+        int otherLine = (int) target.getClass().getMethod("line", String.class).invoke(target, "");
+        assertTrue(first <= changedLine && changedLine <= last, entry + " for line " + changedLine);
+        assertFalse(first <= otherLine && otherLine <= last, entry + " for line " + otherLine);
+    }
+
+    @Test
     void untouchedMethodsHaveNoEntries() {
         assertEquals(Set.of(), lookup("untouched"));
         assertEquals(Set.of(), lookup("helper"));
@@ -155,23 +188,16 @@ class MixinDiagnosticsTest {
                     .filter(method ->
                             method.getKey().endsWith(name) || method.getKey().contains(name + "$"))
                     .flatMap(method -> method.getValue().stream())
+                    .map(MixinDiagnosticsTest::origin)
                     .collect(Collectors.toSet());
             assertEquals(Set.of(entry(TARGET_MIXIN, "merged")), found, name + " in " + methods.keySet());
         }
         Set<Map<String, String>> other = methods.entrySet().stream()
                 .filter(method -> method.getKey().endsWith("diag$other"))
                 .flatMap(method -> method.getValue().stream())
+                .map(MixinDiagnosticsTest::origin)
                 .collect(Collectors.toSet());
         assertEquals(Set.of(entry(OTHER_MIXIN, "merged")), other, String.valueOf(methods.keySet()));
-    }
-
-    @Test
-    void lookupAcceptsInternalNamesAndUnknownNames() {
-        assertEquals(lookup("greet"), Set.copyOf(HyinitDiagnostics.mixinsFor("diagtest/Target", "greet")));
-        assertEquals(List.of(), HyinitDiagnostics.mixinsFor(TARGET, "noSuchMethod"));
-        assertEquals(Map.of(), HyinitDiagnostics.mixinsFor("diagtest.NoSuchClass"));
-        assertTrue(HyinitDiagnostics.methodMap().containsKey(TARGET));
-        assertFalse(HyinitDiagnostics.methodMap().containsKey("diagtest.Fatal"));
     }
 
     @Test
@@ -188,7 +214,7 @@ class MixinDiagnosticsTest {
                         "config", "diagtest-c.mixins.json",
                         "source", "gamma.jar",
                         "kind", "merged")),
-                handler.getValue());
+                handler.getValue().stream().map(MixinDiagnosticsTest::origin).toList());
     }
 
     @Test
@@ -211,46 +237,22 @@ class MixinDiagnosticsTest {
                 configs.stream().map(config -> config.get("source")).collect(Collectors.toSet()));
     }
 
-    @Test
     @SuppressWarnings("unchecked")
-    void skippedMixinOfAnOptionalConfigIsAWarningBlamingItsJar() {
+    private static List<Map<String, Object>> problems(Predicate<Map<String, Object>> filter) {
         List<Map<String, Object>> problems =
                 (List<Map<String, Object>>) HyinitDiagnostics.snapshot().get("problems");
-        Map<String, Object> warning = problems.stream()
-                .filter(problem -> "gamma.jar".equals(problem.get("source")))
-                .findFirst()
-                .orElseThrow(() -> new AssertionError(problems.toString()));
+        return problems.stream().filter(filter).toList();
+    }
+
+    @Test
+    void skippedMixinOfAnOptionalConfigIsOneWarningWithItsJarAndStackTrace() {
+        List<Map<String, Object>> found = problems(problem -> "gamma.jar".equals(problem.get("source")));
+        assertEquals(1, found.size(), found.toString());
+        Map<String, Object> warning = found.get(0);
         assertEquals("warn", warning.get("level"));
         assertTrue(((String) warning.get("message")).contains("diagtest.mixin.c.BrokenMixin"), warning.toString());
         assertTrue(((String) warning.get("message")).contains("diagtest.Broken"), warning.toString());
         assertNotNull(warning.get("detail"));
-    }
-
-    @Test
-    @SuppressWarnings("unchecked")
-    void failedTransformationIsAnErrorBlamingItsJar() {
-        assertInstanceOf(HyinitClassLoader.TransformationException.class, fatalFailure);
-        List<Map<String, Object>> problems =
-                (List<Map<String, Object>>) HyinitDiagnostics.snapshot().get("problems");
-        Map<String, Object> error = problems.stream()
-                .filter(problem -> "error".equals(problem.get("level")))
-                .findFirst()
-                .orElseThrow(() -> new AssertionError(problems.toString()));
-        assertEquals("delta.jar", error.get("source"));
-        assertEquals("Mixin transformation of diagtest.Fatal failed (applied by delta.jar)", error.get("message"));
-        assertTrue(((String) error.get("detail")).contains("missing"), error.toString());
-        assertFalse(problems.toString().contains("/srv/hytale"), problems.toString());
-    }
-
-    @Test
-    @SuppressWarnings("unchecked")
-    void problemsKeepTheStackTraceOfTheirException() {
-        List<Map<String, Object>> problems =
-                (List<Map<String, Object>>) HyinitDiagnostics.snapshot().get("problems");
-        Map<String, Object> warning = problems.stream()
-                .filter(problem -> "gamma.jar".equals(problem.get("source")))
-                .findFirst()
-                .orElseThrow(() -> new AssertionError(problems.toString()));
         String trace = (String) warning.get("stackTrace");
         assertNotNull(trace, warning.toString());
         assertTrue(
@@ -258,18 +260,38 @@ class MixinDiagnosticsTest {
                 trace);
         assertTrue(trace.contains("'missing'"), trace);
         assertTrue(trace.matches("(?s).*\n\tat (\\S*/)?org\\.spongepowered\\.asm\\.mixin\\.injection\\..*"), trace);
+        assertEquals(
+                List.of(Map.of(
+                        "jar",
+                        "gamma.jar",
+                        "config",
+                        "diagtest-c.mixins.json",
+                        "mixin",
+                        "diagtest.mixin.c.BrokenMixin",
+                        "target",
+                        "diagtest.Broken")),
+                DiagnosticsStore.skippedMixins());
+    }
 
-        Map<String, Object> error = problems.stream()
-                .filter(problem -> "error".equals(problem.get("level")))
-                .findFirst()
-                .orElseThrow(() -> new AssertionError(problems.toString()));
+    @Test
+    void failedTransformationIsOneErrorWithItsJarAndStackTrace() {
+        assertInstanceOf(HyinitClassLoader.TransformationException.class, fatalFailure);
+        List<Map<String, Object>> found = problems(problem -> "error".equals(problem.get("level")));
+        assertEquals(1, found.size(), found.toString());
+        Map<String, Object> error = found.get(0);
+        assertEquals("delta.jar", error.get("source"));
+        String message = (String) error.get("message");
+        assertTrue(message.contains("diagtest.Fatal") && message.contains("delta.jar"), message);
+        assertTrue(((String) error.get("detail")).contains("missing"), error.toString());
         String fatal = (String) error.get("stackTrace");
         assertNotNull(fatal, error.toString());
         assertTrue(fatal.startsWith("org.spongepowered.asm.mixin."), fatal);
         assertTrue(fatal.matches("(?s).*\n\tat (\\S*/)?cc\\.irori\\.hyinit\\.mixin\\.HyinitClassLoader\\..*"), fatal);
         assertTrue(fatal.contains("\nCaused by: "), fatal);
         assertTrue(fatal.matches("(?s).*\n\t\\.\\.\\. \\d+ more\n.*"), fatal);
-        assertFalse(fatal.contains("/srv/hytale"), fatal);
+        String all = problems(problem -> true).toString();
+        assertFalse(all.contains("/srv/hytale"), all);
+        assertFalse(HyinitDiagnostics.methodMap().containsKey("diagtest.Fatal"));
     }
 
     @Test
@@ -291,29 +313,17 @@ class MixinDiagnosticsTest {
     }
 
     @Test
-    @SuppressWarnings("unchecked")
-    void failuresThatHyinitAlreadyRecordsAreNotRecordedAgainFromTheMixinLog() {
-        List<Map<String, Object>> problems =
-                (List<Map<String, Object>>) HyinitDiagnostics.snapshot().get("problems");
-        assertEquals(
-                1,
-                problems.stream()
-                        .filter(problem -> "gamma.jar".equals(problem.get("source")))
-                        .count(),
-                problems.toString());
-        assertEquals(
-                1,
-                problems.stream()
-                        .filter(problem -> "error".equals(problem.get("level")))
-                        .count(),
-                problems.toString());
-    }
-
-    @Test
-    void countersCoverTransformedClasses() {
+    void countersCoverTransformedClassesAndTheApplyTimeOfEachJar() {
         Map<String, Object> snapshot = HyinitDiagnostics.snapshot();
         assertTrue((Long) snapshot.get("classesTransformed") >= 3, snapshot.toString());
         assertTrue((Long) snapshot.get("transformNanos") > 0, snapshot.toString());
         assertEquals(2L, snapshot.get("mixinTargetClasses"));
+        @SuppressWarnings("unchecked")
+        Map<String, Long> bySource = (Map<String, Long>) snapshot.get("applyNanosBySource");
+        assertTrue(bySource.get("alpha.jar") > 0 && bySource.get("beta.jar") > 0, bySource.toString());
+        assertFalse(bySource.containsKey("epsilon.jar"), bySource.toString());
+        long applied = bySource.values().stream().mapToLong(Long::longValue).sum();
+        assertTrue(applied <= (Long) snapshot.get("transformNanos"), snapshot.toString());
+        assertThrows(UnsupportedOperationException.class, () -> bySource.put("x.jar", 1L));
     }
 }

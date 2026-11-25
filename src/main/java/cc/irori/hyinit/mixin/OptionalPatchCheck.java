@@ -1,7 +1,6 @@
 package cc.irori.hyinit.mixin;
 
 import cc.irori.hyinit.HyinitLogger;
-import cc.irori.hyinit.shared.DiagnosticsStore;
 import java.util.ArrayList;
 import java.util.List;
 import org.objectweb.asm.tree.AbstractInsnNode;
@@ -30,6 +29,11 @@ public final class OptionalPatchCheck implements IExtension {
             new Patch(
                     "com/hypixel/hytale/LateMain",
                     "lateMain",
+                    "hyinit$blameCrashes",
+                    "Hyinit could not patch LateMain: crash traces after Hytale's logger starts do not name the Mixin JAR"),
+            new Patch(
+                    "com/hypixel/hytale/LateMain",
+                    "lateMain",
                     "hyinit$replayStartupLines",
                     "Hyinit could not patch LateMain: startup lines are not copied to the server log"));
 
@@ -44,8 +48,7 @@ public final class OptionalPatchCheck implements IExtension {
     @Override
     public void postApply(ITargetClassContext context) {
         for (Patch patch : missing(context.getClassNode())) {
-            HyinitLogger.get().warn(patch.message());
-            DiagnosticsStore.addProblem(DiagnosticsStore.WARN, patch.message(), null, null);
+            HyinitLogger.warnProblem(patch.message(), null, null);
         }
     }
 

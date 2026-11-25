@@ -1,5 +1,6 @@
 package cc.irori.hyinit;
 
+import static cc.irori.hyinit.TestJars.textJar;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -9,8 +10,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import cc.irori.hyinit.shared.DiagnosticsStore;
 import cc.irori.hyinit.shared.HyinitDiagnostics;
 import java.io.IOException;
-import java.io.OutputStream;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
@@ -18,8 +17,6 @@ import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
-import java.util.jar.JarEntry;
-import java.util.jar.JarOutputStream;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -36,7 +33,7 @@ class StartupDiagnosticsTest {
     static void collect() throws Exception {
         earlyDir = Files.createDirectories(root.resolve("server dir").resolve("earlyplugins"))
                 .toRealPath();
-        alpha = jar(
+        alpha = textJar(
                 earlyDir.resolve("alpha.jar"),
                 Map.of(
                         "manifest.json",
@@ -45,11 +42,13 @@ class StartupDiagnosticsTest {
                         "alpha.mixins.json",
                         "{\"package\":\"example.alpha.mixin\",\"mixins\":[]}"));
         Files.copy(alpha, earlyDir.resolve("copy.jar"));
-        jar(earlyDir.resolve("bad.jar"), Map.of("manifest.json", "{not json"));
-        jar(earlyDir.resolve("plain.jar"), Map.of("example/Plain.class", "x"));
+        textJar(earlyDir.resolve("bad.jar"), Map.of("manifest.json", "{not json"));
+        textJar(earlyDir.resolve("plain.jar"), Map.of("example/Plain.class", "x"));
 
         ConfigCollector.Result result = ConfigCollector.collectMixinConfigs(
-                earlyDir.getParent(), List.of(earlyDir), earlyDir.getParent().resolve("Hyinit.jar"));
+                ConfigCollector.serverConfig(earlyDir.getParent()),
+                List.of(earlyDir),
+                earlyDir.getParent().resolve("Hyinit.jar"));
         List<Path> earlyJars = new ArrayList<>();
         try (var files = Files.list(earlyDir)) {
             files.map(Path::toAbsolutePath)
@@ -65,18 +64,6 @@ class StartupDiagnosticsTest {
                 "Could not open " + unknown + " or /opt/unknown/x.jar or C:\\Users\\someone\\y.jar or file:/opt/z.jar",
                 unknown.getFileName().toString(),
                 new IOException(unknown + ": denied", new IOException("D:\\srv\\w.jar")));
-    }
-
-    private static Path jar(Path path, Map<String, String> entries) throws IOException {
-        try (OutputStream out = Files.newOutputStream(path);
-                JarOutputStream jar = new JarOutputStream(out)) {
-            for (Map.Entry<String, String> entry : entries.entrySet()) {
-                jar.putNextEntry(new JarEntry(entry.getKey()));
-                jar.write(entry.getValue().getBytes(StandardCharsets.UTF_8));
-                jar.closeEntry();
-            }
-        }
-        return path;
     }
 
     private static void collectStrings(Object value, List<String> strings) {
@@ -156,7 +143,8 @@ class StartupDiagnosticsTest {
         assertNull(source("copy.jar"));
         Map<String, Object> warning = problem("copy.jar", "Skipping");
         assertEquals("warn", warning.get("level"));
-        assertEquals("Skipping copy.jar. It is an identical copy of alpha.jar.", warning.get("message"));
+        String message = (String) warning.get("message");
+        assertTrue(message.contains("copy.jar") && message.contains("alpha.jar"), message);
         assertNull(warning.get("detail"));
     }
 

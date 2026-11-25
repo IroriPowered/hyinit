@@ -19,6 +19,7 @@ import org.objectweb.asm.tree.AbstractInsnNode;
 import org.objectweb.asm.tree.AnnotationNode;
 import org.objectweb.asm.tree.ClassNode;
 import org.objectweb.asm.tree.InvokeDynamicInsnNode;
+import org.objectweb.asm.tree.LineNumberNode;
 import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
 import org.spongepowered.asm.mixin.FabricUtil;
@@ -39,7 +40,7 @@ public final class MixinOriginExtension implements IExtension {
     private final ThreadLocal<PendingClass> pending = new ThreadLocal<>();
     private volatile boolean configsRecorded;
 
-    private record PendingClass(ITargetClassContext context, Set<String> originalMethods) {}
+    private record PendingClass(ITargetClassContext context, Set<String> originalMethods, long start) {}
 
     public MixinOriginExtension(List<Config> configs) {
         List<IMixinConfig> list = new ArrayList<>(configs.size());
@@ -56,11 +57,12 @@ public final class MixinOriginExtension implements IExtension {
 
     @Override
     public void preApply(ITargetClassContext context) {
+        MixinConditions.recordPluginRefusals();
         Set<String> originals = new HashSet<>();
         for (MethodNode method : context.getClassNode().methods) {
             originals.add(method.name + method.desc);
         }
-        pending.set(new PendingClass(context, originals));
+        pending.set(new PendingClass(context, originals, System.nanoTime()));
     }
 
     @Override
@@ -72,8 +74,21 @@ public final class MixinOriginExtension implements IExtension {
         ClassNode node = context.getClassNode();
         PendingClass before = pending.get();
         pending.remove();
-        Set<String> originals = before != null && before.context() == context ? before.originalMethods() : Set.of();
-        Map<String, List<DiagnosticsStore.MethodOrigin>> methods = methodOrigins(node, originals);
+        boolean same = before != null && before.context() == context;
+        if (same) {
+            long nanos = System.nanoTime() - before.start();
+            String target = Type.getObjectType(node.name).getClassName();
+            Set<String> sources = new HashSet<>();
+            for (IMixinConfig config : configs) {
+                String source = sourceName(config);
+                if (source != null && config.getTargets().contains(target)) {
+                    sources.add(source);
+                }
+            }
+            DiagnosticsStore.addApplyNanos(sources, nanos);
+        }
+        Set<String> originals = same ? before.originalMethods() : Set.of();
+        Map<String, List<DiagnosticsStore.MethodRecord>> methods = methodRecords(node, originals);
         if (!methods.isEmpty()) {
             DiagnosticsStore.recordMethods(Type.getObjectType(node.name).getClassName(), methods);
         }
@@ -82,7 +97,7 @@ public final class MixinOriginExtension implements IExtension {
     @Override
     public void export(MixinEnvironment env, String name, boolean force, ClassNode classNode) {}
 
-    private Map<String, List<DiagnosticsStore.MethodOrigin>> methodOrigins(ClassNode node, Set<String> originals) {
+    private Map<String, List<DiagnosticsStore.MethodRecord>> methodRecords(ClassNode node, Set<String> originals) {
         Map<String, String> mergedBy = new HashMap<>();
         Map<String, String> callees = new HashMap<>();
         for (MethodNode method : node.methods) {
@@ -98,43 +113,57 @@ public final class MixinOriginExtension implements IExtension {
         if (mergedBy.isEmpty()) {
             return Map.of();
         }
-        Map<String, Set<DiagnosticsStore.MethodOrigin>> origins = new LinkedHashMap<>();
+        Map<String, List<DiagnosticsStore.MethodRecord>> result = new LinkedHashMap<>();
         for (MethodNode method : node.methods) {
             String mixin = mergedBy.get(method.name + method.desc);
-            if (mixin != null) {
-                add(origins, method.name, origin(mixin, 0));
-                continue;
+            Set<DiagnosticsStore.MethodOrigin> origins =
+                    mixin != null ? Set.of(origin(mixin, 0)) : changedBy(node, method, callees);
+            if (!origins.isEmpty()) {
+                result.computeIfAbsent(method.name, key -> new ArrayList<>(1)).add(record(method, origins));
             }
-            for (AbstractInsnNode insn = method.instructions.getFirst(); insn != null; insn = insn.getNext()) {
-                if (insn instanceof MethodInsnNode call) {
-                    if (call.owner.equals(node.name)) {
-                        addChanged(origins, method.name, callees.get(call.name + call.desc));
-                    }
-                } else if (insn instanceof InvokeDynamicInsnNode indy) {
-                    for (Object arg : indy.bsmArgs) {
-                        if (arg instanceof Handle handle && handle.getOwner().equals(node.name)) {
-                            addChanged(origins, method.name, callees.get(handle.getName() + handle.getDesc()));
-                        }
+        }
+        return result;
+    }
+
+    private Set<DiagnosticsStore.MethodOrigin> changedBy(
+            ClassNode node, MethodNode method, Map<String, String> callees) {
+        Set<DiagnosticsStore.MethodOrigin> origins = Set.of();
+        for (AbstractInsnNode insn = method.instructions.getFirst(); insn != null; insn = insn.getNext()) {
+            if (insn instanceof MethodInsnNode call) {
+                if (call.owner.equals(node.name)) {
+                    origins = addChanged(origins, callees.get(call.name + call.desc));
+                }
+            } else if (insn instanceof InvokeDynamicInsnNode indy) {
+                for (Object arg : indy.bsmArgs) {
+                    if (arg instanceof Handle handle && handle.getOwner().equals(node.name)) {
+                        origins = addChanged(origins, callees.get(handle.getName() + handle.getDesc()));
                     }
                 }
             }
         }
-        Map<String, List<DiagnosticsStore.MethodOrigin>> result = new LinkedHashMap<>();
-        origins.forEach((method, set) -> result.put(method, List.copyOf(set)));
+        return origins;
+    }
+
+    private Set<DiagnosticsStore.MethodOrigin> addChanged(Set<DiagnosticsStore.MethodOrigin> origins, String mixin) {
+        if (mixin == null) {
+            return origins;
+        }
+        Set<DiagnosticsStore.MethodOrigin> result = origins.isEmpty() ? new LinkedHashSet<>() : origins;
+        result.add(origin(mixin, 1));
         return result;
     }
 
-    private void addChanged(Map<String, Set<DiagnosticsStore.MethodOrigin>> origins, String method, String mixin) {
-        if (mixin != null) {
-            add(origins, method, origin(mixin, 1));
+    private static DiagnosticsStore.MethodRecord record(MethodNode method, Set<DiagnosticsStore.MethodOrigin> origins) {
+        int first = Integer.MAX_VALUE;
+        int last = 0;
+        for (AbstractInsnNode insn = method.instructions.getFirst(); insn != null; insn = insn.getNext()) {
+            if (insn instanceof LineNumberNode number) {
+                int line = number.line & 0xFFFF;
+                first = Math.min(first, line);
+                last = Math.max(last, line);
+            }
         }
-    }
-
-    private static void add(
-            Map<String, Set<DiagnosticsStore.MethodOrigin>> origins,
-            String method,
-            DiagnosticsStore.MethodOrigin origin) {
-        origins.computeIfAbsent(method, key -> new LinkedHashSet<>()).add(origin);
+        return new DiagnosticsStore.MethodRecord(method.desc, last == 0 ? 0 : first, last, List.copyOf(origins));
     }
 
     private DiagnosticsStore.MethodOrigin origin(String mixin, int kind) {
@@ -211,7 +240,7 @@ public final class MixinOriginExtension implements IExtension {
     }
 
     @SuppressWarnings("unchecked")
-    private static List<String> mixinClasses(IMixinConfig config) {
+    static List<String> mixinClasses(IMixinConfig config) {
         try {
             Method method = config.getClass().getMethod("getClasses");
             method.setAccessible(true);

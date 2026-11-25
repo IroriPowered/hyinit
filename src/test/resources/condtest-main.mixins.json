@@ -1,0 +1,24 @@
+{
+    "required": true,
+    "minVersion": "0.8",
+    "package": "condtest.mixin.main",
+    "plugin": "condtest.SwitchPlugin",
+    "injectors": {
+        "defaultRequire": 1
+    },
+    "mixins": [
+        "MixinKept",
+        "MixinOld",
+        "MixinDependent",
+        "MixinMutualA",
+        "MixinMutualB",
+        "MixinPairA",
+        "MixinPairB",
+        "MixinUnknown",
+        "MixinChanged",
+        "MixinMembers",
+        "MixinDangling",
+        "MixinSwitchedOff",
+        "MixinHalfOff"
+    ]
+}

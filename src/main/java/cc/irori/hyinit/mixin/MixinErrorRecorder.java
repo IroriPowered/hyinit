@@ -16,7 +16,13 @@ public final class MixinErrorRecorder implements IMixinErrorHandler {
                             + " could not be prepared and was skipped",
                     MixinOriginExtension.sourceName(config),
                     th);
+            DiagnosticsStore.addSkippedMixin(
+                    MixinOriginExtension.sourceName(config), config.getName(), mixin.getClassName(), null);
         } else if (action == ErrorAction.ERROR) {
+            if (DiagnosticsStore.addPrepareFailure(
+                    MixinOriginExtension.sourceName(config), config.getName(), mixin.getClassName(), th)) {
+                return ErrorAction.WARN;
+            }
             DiagnosticsStore.markRethrown(th);
         }
         return action;
@@ -32,6 +38,8 @@ public final class MixinErrorRecorder implements IMixinErrorHandler {
                             + targetClassName + " and was skipped",
                     MixinOriginExtension.sourceName(config),
                     th);
+            DiagnosticsStore.addSkippedMixin(
+                    MixinOriginExtension.sourceName(config), config.getName(), mixin.getClassName(), targetClassName);
         } else if (action == ErrorAction.ERROR) {
             DiagnosticsStore.markRethrown(th);
         }

@@ -1,5 +1,6 @@
 package cc.irori.hyinit.shared;
 
+import cc.irori.hyinit.util.VersionRange;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -8,7 +9,7 @@ import java.util.Map;
 
 public final class HyinitDiagnostics {
 
-    static final int API_VERSION = 1;
+    static final int API_VERSION = 2;
 
     private HyinitDiagnostics() {}
 
@@ -20,8 +21,31 @@ public final class HyinitDiagnostics {
         return DiagnosticsStore.snapshot();
     }
 
+    public static String hytaleVersion() {
+        return DiagnosticsStore.hytaleVersion();
+    }
+
+    public static boolean hytaleVersionMatches(String range) {
+        try {
+            String version = DiagnosticsStore.hytaleVersion();
+            return version != null
+                    && range != null
+                    && VersionRange.parse(range).matches(VersionRange.Version.parse(version));
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+
+    public static boolean mixinApplied(String mixinClass) {
+        try {
+            return mixinClass != null && DiagnosticsStore.mixinApplied(mixinClass.replace('/', '.'));
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+
     public static Map<String, List<Map<String, String>>> mixinsFor(String className) {
-        Map<String, List<DiagnosticsStore.MethodOrigin>> methods = lookup(className);
+        Map<String, List<DiagnosticsStore.MethodRecord>> methods = lookup(className);
         if (methods == null) {
             return Map.of();
         }
@@ -29,12 +53,16 @@ public final class HyinitDiagnostics {
     }
 
     public static List<Map<String, String>> mixinsFor(String className, String methodName) {
-        Map<String, List<DiagnosticsStore.MethodOrigin>> methods = lookup(className);
+        return mixinsFor(className, methodName, null);
+    }
+
+    public static List<Map<String, String>> mixinsFor(String className, String methodName, String descriptor) {
+        Map<String, List<DiagnosticsStore.MethodRecord>> methods = lookup(className);
         if (methods == null || methodName == null) {
             return List.of();
         }
-        List<DiagnosticsStore.MethodOrigin> origins = methods.get(methodName);
-        return origins == null ? List.of() : toMaps(origins);
+        List<DiagnosticsStore.MethodRecord> overloads = methods.get(methodName);
+        return overloads == null ? List.of() : toMaps(overloads, descriptor);
     }
 
     public static Map<String, Map<String, List<Map<String, String>>>> methodMap() {
@@ -43,7 +71,7 @@ public final class HyinitDiagnostics {
         return Collections.unmodifiableMap(map);
     }
 
-    private static Map<String, List<DiagnosticsStore.MethodOrigin>> lookup(String className) {
+    private static Map<String, List<DiagnosticsStore.MethodRecord>> lookup(String className) {
         if (className == null) {
             return null;
         }
@@ -51,16 +79,18 @@ public final class HyinitDiagnostics {
     }
 
     private static Map<String, List<Map<String, String>>> toMaps(
-            Map<String, List<DiagnosticsStore.MethodOrigin>> methods) {
+            Map<String, List<DiagnosticsStore.MethodRecord>> methods) {
         Map<String, List<Map<String, String>>> map = new LinkedHashMap<>();
-        methods.forEach((method, origins) -> map.put(method, toMaps(origins)));
+        methods.forEach((method, overloads) -> map.put(method, toMaps(overloads, null)));
         return Collections.unmodifiableMap(map);
     }
 
-    private static List<Map<String, String>> toMaps(List<DiagnosticsStore.MethodOrigin> origins) {
-        List<Map<String, String>> list = new ArrayList<>(origins.size());
-        for (DiagnosticsStore.MethodOrigin origin : origins) {
-            list.add(origin.toMap());
+    private static List<Map<String, String>> toMaps(List<DiagnosticsStore.MethodRecord> overloads, String descriptor) {
+        List<Map<String, String>> list = new ArrayList<>();
+        for (DiagnosticsStore.MethodRecord overload : overloads) {
+            if (descriptor == null || descriptor.equals(overload.descriptor())) {
+                overload.addTo(list);
+            }
         }
         return Collections.unmodifiableList(list);
     }

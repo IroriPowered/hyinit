@@ -90,6 +90,7 @@ public class HyinitMixinService extends MixinServiceAbstract
         ClassReader reader = new ClassReader(getClassBytes(name, runTransformers));
         ClassNode node = new ClassNode();
         reader.accept(node, readerFlags);
+        MixinConditions.apply(name, node);
         return node;
     }
 

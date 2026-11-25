@@ -13,14 +13,15 @@ class LaunchDiagnosticsTest {
     void versionIsTheBuildVersionInPropertyAndSnapshot() throws Exception {
         String expected = System.getProperty("hyinit.projectVersion");
         assertNotNull(expected);
+        assertNotNull(System.getProperty("hyinit.mixinVersion"));
         assertEquals(expected, Main.recordLaunch(true));
         assertEquals(expected, System.getProperty("hyinit.version"));
         Map<String, Object> snapshot = HyinitDiagnostics.snapshot();
         assertEquals(expected, snapshot.get("hyinitVersion"));
         assertEquals("earlyPlugin", snapshot.get("launchMode"));
-        assertEquals("0.8.7", snapshot.get("mixinVersion"));
-        assertEquals("0.17.5", snapshot.get("fabricMixinVersion"));
-        assertEquals("0.5.5", snapshot.get("mixinExtrasVersion"));
+        assertEquals(System.getProperty("hyinit.mixinVersion"), snapshot.get("mixinVersion"));
+        assertEquals(System.getProperty("hyinit.fabricMixinVersion"), snapshot.get("fabricMixinVersion"));
+        assertEquals(System.getProperty("hyinit.mixinExtrasVersion"), snapshot.get("mixinExtrasVersion"));
         Main.recordLaunch(false);
         assertEquals("launcher", HyinitDiagnostics.snapshot().get("launchMode"));
     }

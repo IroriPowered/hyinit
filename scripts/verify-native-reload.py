@@ -1,6 +1,5 @@
 import argparse
 import fcntl
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -8,10 +7,7 @@ import subprocess
 import time
 import zipfile
 
-
-def digest(path):
-    with path.open("rb") as stream:
-        return hashlib.file_digest(stream, "sha256").hexdigest()
+from verify_common import ENV, digest
 
 
 def main():
@@ -24,9 +20,6 @@ def main():
     args = parser.parse_args()
     hyinit, server, assets, java_home, output = [path.resolve() for path in (args.hyinit_jar, args.server_jar, args.assets, args.java_home, args.output_dir)]
     output.mkdir(parents=True, exist_ok=False)
-    env = dict(os.environ)
-    for key in ("JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS", "JDK_JAVA_OPTIONS", "CLASSPATH"):
-        env.pop(key, None)
     result = {"status": "running", "hyinitSha256": digest(hyinit), "serverSha256": digest(server)}
     try:
         classes = output / "classes"
@@ -35,7 +28,7 @@ def main():
         with (output / "compile.log").open("wb") as log:
             code = subprocess.run([str(java_home / "bin/javac"), "--release", "25", "-proc:none", "-g", "-cp",
                                    os.pathsep.join(map(str, (hyinit, server))), "-d", str(classes), *map(str, sources)],
-                                  env=env, stdout=log, stderr=subprocess.STDOUT).returncode
+                                  env=ENV, stdout=log, stderr=subprocess.STDOUT).returncode
         if code:
             raise RuntimeError((output / "compile.log").read_text()[-10000:])
         runtime = output / "runtime"
@@ -91,7 +84,7 @@ def main():
             result["lockWaitSeconds"] = round(time.time() - started, 1)
             with log_path.open("wb") as log:
                 try:
-                    code = subprocess.run(list(map(str, command)), cwd=runtime, env=env, stdin=subprocess.DEVNULL,
+                    code = subprocess.run(list(map(str, command)), cwd=runtime, env=ENV, stdin=subprocess.DEVNULL,
                                           stdout=log, stderr=subprocess.STDOUT, timeout=args.timeout).returncode
                 except subprocess.TimeoutExpired:
                     code = "timeout"

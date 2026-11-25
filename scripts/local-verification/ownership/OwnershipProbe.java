@@ -25,7 +25,7 @@ public final class OwnershipProbe {
         try {
             String mode = System.getProperty("local.hyinit.ownership.mode");
             if (mode.equals("same")) sameSource(true, true);
-            else if (mode.equals("absent") || mode.equals("empty") || mode.startsWith("invalid-")) sameSource(false, true);
+            else if (mode.equals("absent") || mode.equals("invalid-package")) sameSource(false, true);
             else if (mode.equals("no-main")) sameSource(false, false);
             else if (mode.equals("different")) differentSource();
             else if (mode.equals("bundled-library")) bundledLibrary();

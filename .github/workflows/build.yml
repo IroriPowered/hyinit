@@ -1,8 +1,9 @@
 name: Build
-on: [pull_request, push]
+on: [pull_request, push, workflow_call]
 
 jobs:
   build:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout repository
@@ -25,17 +26,84 @@ jobs:
       - name: Resolve Hytale server JAR
         id: server
         run: echo "jar=$(./gradlew -q printHytaleServerJar)" >> "$GITHUB_OUTPUT"
-      - name: Verify runtime behaviour
+      - name: Verify runtime behaviour on the pinned Hytale
         run: bash scripts/verify-all.sh build/libs/Hyinit-*.jar "${{ steps.server.outputs.jar }}" "$JAVA_HOME" "$RUNNER_TEMP"
       - name: Capture verification evidence
-        if: always()
+        if: failure()
         uses: actions/upload-artifact@v7
         with:
-          name: Verification
-          path: ${{ runner.temp }}/verify-*
+          name: Verification-pinned
+          path: |
+            ${{ runner.temp }}/verify-*
+            !${{ runner.temp }}/verify-*/**/*.jar
           if-no-files-found: ignore
       - name: Capture build artifacts
         uses: actions/upload-artifact@v7
         with:
           name: Artifacts
           path: build/libs/
+
+  newest-hytale:
+    needs: build
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        repository: [release, pre-release]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+      - name: Resolve newest Hytale ${{ matrix.repository }}
+        id: server
+        run: |
+          base="https://maven.hytale.com/${{ matrix.repository }}/com/hypixel/hytale/Server"
+          version=$(curl -fsSL "$base/maven-metadata.xml" | sed -n 's:.*<latest>\(.*\)</latest>.*:\1:p')
+          test -n "$version"
+          pinned=$(sed -n 's/^hytale = "\(.*\)"$/\1/p' gradle/libs.versions.toml)
+          test -n "$pinned"
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [ "${{ matrix.repository }}" = release ] && [ "$version" = "$pinned" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Hytale ${{ matrix.repository }} $version is the pinned version, already verified by the build job" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Testing against Hytale ${{ matrix.repository }} $version" >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Setup JDK
+        if: steps.server.outputs.skip != 'true'
+        uses: actions/setup-java@v6
+        with:
+          java-version: "25"
+          distribution: "temurin"
+      - name: Setup Gradle
+        if: steps.server.outputs.skip != 'true'
+        uses: gradle/actions/setup-gradle@v6
+      - name: Make Gradle wrapper executable
+        if: steps.server.outputs.skip != 'true'
+        run: chmod +x ./gradlew
+      - name: Download build artifacts
+        if: steps.server.outputs.skip != 'true'
+        uses: actions/download-artifact@v8
+        with:
+          name: Artifacts
+          path: build/libs
+      - name: Download Hytale ${{ steps.server.outputs.version }}
+        id: download
+        if: steps.server.outputs.skip != 'true'
+        run: curl -fsSL -o "$RUNNER_TEMP/Server.jar" "${{ steps.server.outputs.base }}/${{ steps.server.outputs.version }}/Server-${{ steps.server.outputs.version }}.jar"
+      - name: Verify runtime behaviour on Hytale ${{ steps.server.outputs.version }}
+        if: steps.server.outputs.skip != 'true'
+        run: bash scripts/verify-all.sh build/libs/Hyinit-*.jar "$RUNNER_TEMP/Server.jar" "$JAVA_HOME" "$RUNNER_TEMP"
+      - name: Compare version ranges with Hytale ${{ steps.server.outputs.version }}
+        if: ${{ !cancelled() && steps.download.outcome == 'success' }}
+        run: ./gradlew hytaleParityTest -PhytaleServerJar="$RUNNER_TEMP/Server.jar"
+      - name: Capture verification evidence
+        if: ${{ failure() && steps.server.outputs.skip != 'true' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: Verification-${{ matrix.repository }}-${{ steps.server.outputs.version }}
+          path: |
+            ${{ runner.temp }}/verify-*
+            !${{ runner.temp }}/verify-*/**/*.jar
+          if-no-files-found: ignore

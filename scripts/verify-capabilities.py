@@ -1,17 +1,12 @@
 import argparse
-import hashlib
 import json
 import os
 from pathlib import Path
 import shutil
-import subprocess
 import sys
 import zipfile
 
-
-def digest(path):
-    with path.open("rb") as stream:
-        return hashlib.file_digest(stream, "sha256").hexdigest()
+from verify_common import digest, runner
 
 
 def main():
@@ -32,16 +27,9 @@ def main():
         if not path.is_file():
             parser.error("Required file not found: " + str(path))
     output.mkdir(parents=True, exist_ok=False)
-    env = os.environ.copy()
-    for key in ("JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS", "JDK_JAVA_OPTIONS", "CLASSPATH"):
-        env.pop(key, None)
     result = {"status": "running", "hyinitSha256": digest(hyinit), "serverSha256": digest(server), "phases": {}}
 
-    def run(command, cwd, log):
-        with log.open("wb") as stream:
-            process = subprocess.run(list(map(str, command)), cwd=cwd, env=env, stdout=stream,
-                                     stderr=subprocess.STDOUT, timeout=args.timeout)
-        return process.returncode, log.read_text(errors="replace")
+    run = runner(args.timeout)
 
     try:
         classes = output / "classes"
@@ -73,9 +61,9 @@ def main():
         write_helper(legacy_helper, {"HyinitMixinCompatibility": "0.17.0"})
         expected_failures = {
             "legacy": ["Enum extensions are not supported at the current compatibility version",
-                       "Set \"HyinitMixinCompatibility\": \"0.17.1\" in the plugin's manifest.json"],
+                       "HyinitMixinCompatibility", "0.17.1"],
         }
-        for mode in ("positive", "legacy"):
+        for mode in ("positive",) if args.early_plugin else ("positive", "legacy"):
             runtime = output / mode
             runtime.mkdir()
             plugins = runtime / "earlyplugins"

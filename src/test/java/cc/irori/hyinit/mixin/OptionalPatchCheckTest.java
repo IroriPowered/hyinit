@@ -39,7 +39,8 @@ class OptionalPatchCheckTest {
                 LATE_MAIN,
                 "lateMain",
                 "handler$zza000$hyinit$enableLoggerDelegate",
-                "handler$zza001$hyinit$replayStartupLines");
+                "handler$zza001$hyinit$blameCrashes",
+                "handler$zza002$hyinit$replayStartupLines");
         assertEquals(List.of(), missing(lateMain));
         ClassNode server = target(HYTALE_SERVER, "<init>", "hyinit$treatAsModded");
         assertEquals(List.of(), missing(server));
@@ -48,9 +49,11 @@ class OptionalPatchCheckTest {
     @Test
     void eachMissingHandlerIsReported() {
         ClassNode lateMain = target(LATE_MAIN, "lateMain", "handler$zza000$hyinit$enableLoggerDelegate");
-        assertEquals(List.of("hyinit$replayStartupLines"), missing(lateMain));
+        assertEquals(List.of("hyinit$blameCrashes", "hyinit$replayStartupLines"), missing(lateMain));
         ClassNode bare = target(LATE_MAIN, "lateMain");
-        assertEquals(List.of("hyinit$enableLoggerDelegate", "hyinit$replayStartupLines"), missing(bare));
+        assertEquals(
+                List.of("hyinit$enableLoggerDelegate", "hyinit$blameCrashes", "hyinit$replayStartupLines"),
+                missing(bare));
     }
 
     @Test

@@ -33,4 +33,12 @@ public class Target {
     public int untouched() {
         return 7;
     }
+
+    public int line(int x) {
+        return new Throwable().getStackTrace()[0].getLineNumber();
+    }
+
+    public int line(String x) {
+        return new Throwable().getStackTrace()[0].getLineNumber();
+    }
 }

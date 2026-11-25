@@ -1,5 +1,6 @@
 package cc.irori.hyinit.mixin.impl.optional;
 
+import cc.irori.hyinit.mixin.CrashBlame;
 import cc.irori.hyinit.mixin.HyinitClassLoader;
 import cc.irori.hyinit.util.ReflectionUtil;
 import com.hypixel.hytale.LateMain;
@@ -40,6 +41,17 @@ public class MixinLateMain {
                             shift = At.Shift.BEFORE))
     private static void hyinit$enableLoggerDelegate(String[] args, CallbackInfo ci) {
         ReflectionUtil.invokeMethod(hyinit$ENABLE_DELEGATE_METHOD, null, new HytaleLogManager());
+    }
+
+    @Inject(
+            method = "lateMain",
+            at =
+                    @At(
+                            value = "INVOKE",
+                            target = "Lcom/hypixel/hytale/logger/HytaleLogger;init()V",
+                            shift = At.Shift.AFTER))
+    private static void hyinit$blameCrashes(String[] args, CallbackInfo ci) {
+        CrashBlame.install();
     }
 
     @Unique

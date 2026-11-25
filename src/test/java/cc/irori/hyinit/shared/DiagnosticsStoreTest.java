@@ -4,7 +4,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.ArrayList;
@@ -97,6 +96,19 @@ class DiagnosticsStoreTest {
     }
 
     @Test
+    void hytaleVersionMatchesFollowsIfHytaleAndAppliedMixinsFollowConditions() {
+        DiagnosticsStore.setHytaleVersion("0.8.0-pre.6");
+        DiagnosticsStore.setAppliedMixins(name -> name.equals("example.MixinApplied"));
+        assertEquals("0.8.0-pre.6", HyinitDiagnostics.hytaleVersion());
+        assertTrue(HyinitDiagnostics.hytaleVersionMatches(">=0.8.0-pre.1"));
+        assertFalse(HyinitDiagnostics.hytaleVersionMatches(">=0.7.0"));
+        assertFalse(HyinitDiagnostics.hytaleVersionMatches("not a range"));
+        assertTrue(HyinitDiagnostics.mixinApplied("example/MixinApplied"));
+        assertFalse(HyinitDiagnostics.mixinApplied("example.MixinSkipped"));
+        assertFalse(HyinitDiagnostics.mixinApplied(null));
+    }
+
+    @Test
     void snapshotIsACopyThatLaterRecordingDoesNotChange() {
         Map<String, Object> before = HyinitDiagnostics.snapshot();
         int count = problems(before).size();
@@ -138,24 +150,41 @@ class DiagnosticsStoreTest {
     }
 
     @Test
-    void equalOriginsAreShared() {
+    void overloadsAreSeparateByDescriptorAndJoinedByName() {
         DiagnosticsStore.MethodOrigin first =
-                DiagnosticsStore.origin("a.Mixin", "a.mixins.json", "a.jar", DiagnosticsStore.MERGED);
+                DiagnosticsStore.origin("a.MixinInt", "a.mixins.json", "a.jar", DiagnosticsStore.CHANGED);
         DiagnosticsStore.MethodOrigin second =
-                DiagnosticsStore.origin("a.Mixin", "a.mixins.json", new String("a.jar"), DiagnosticsStore.MERGED);
-        assertSame(first, second);
-    }
+                DiagnosticsStore.origin("a.MixinText", "a.mixins.json", "a.jar", DiagnosticsStore.MERGED);
+        DiagnosticsStore.recordMethods(
+                "a.Target",
+                Map.of(
+                        "run",
+                        List.of(
+                                new DiagnosticsStore.MethodRecord("(I)V", 10, 14, List.of(first)),
+                                new DiagnosticsStore.MethodRecord("(Ljava/lang/String;)V", 0, 0, List.of(second)))));
 
-    @Test
-    void recordedMethodsAreReturnedAsPlainMaps() {
-        DiagnosticsStore.MethodOrigin origin =
-                DiagnosticsStore.origin("a.Mixin", "a.mixins.json", "a.jar", DiagnosticsStore.CHANGED);
-        DiagnosticsStore.recordMethods("a.Target", Map.of("run", List.of(origin)));
+        Map<String, String> withLines = new LinkedHashMap<>();
+        withLines.put("mixin", "a.MixinInt");
+        withLines.put("config", "a.mixins.json");
+        withLines.put("source", "a.jar");
+        withLines.put("kind", "changed");
+        withLines.put("descriptor", "(I)V");
+        withLines.put("firstLine", "10");
+        withLines.put("lastLine", "14");
+        Map<String, String> withoutLines = new LinkedHashMap<>(withLines);
+        withoutLines.put("mixin", "a.MixinText");
+        withoutLines.put("kind", "merged");
+        withoutLines.put("descriptor", "(Ljava/lang/String;)V");
+        withoutLines.put("firstLine", null);
+        withoutLines.put("lastLine", null);
+
+        assertEquals(List.of(withLines), HyinitDiagnostics.mixinsFor("a.Target", "run", "(I)V"));
+        assertEquals(List.of(withoutLines), HyinitDiagnostics.mixinsFor("a/Target", "run", "(Ljava/lang/String;)V"));
+        assertEquals(List.of(), HyinitDiagnostics.mixinsFor("a.Target", "run", "()V"));
+        assertEquals(List.of(withLines, withoutLines), HyinitDiagnostics.mixinsFor("a.Target", "run"));
+        assertEquals(List.of(withLines, withoutLines), HyinitDiagnostics.mixinsFor("a.Target", "run", null));
         assertEquals(
-                List.of(Map.of("mixin", "a.Mixin", "config", "a.mixins.json", "source", "a.jar", "kind", "changed")),
-                HyinitDiagnostics.mixinsFor("a.Target", "run"));
-        assertEquals(
-                Map.of("run", HyinitDiagnostics.mixinsFor("a.Target", "run")),
+                Map.of("run", List.of(withLines, withoutLines)),
                 HyinitDiagnostics.methodMap().get("a.Target"));
     }
 }

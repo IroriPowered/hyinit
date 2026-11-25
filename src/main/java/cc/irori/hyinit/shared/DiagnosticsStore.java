@@ -11,12 +11,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.Queue;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.WeakHashMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.LongAdder;
+import java.util.function.Predicate;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -39,10 +41,15 @@ public final class DiagnosticsStore {
     private static volatile String mixinVersion;
     private static volatile String mixinExtrasVersion;
     private static volatile String fabricMixinVersion;
+    private static volatile String hytaleVersion;
     private static volatile long bootstrapMillis = -1;
     private static volatile List<Map<String, Object>> sources = List.of();
     private static volatile List<Map<String, Object>> configs = List.of();
     private static volatile List<String> knownPaths = List.of();
+    private static volatile List<Map<String, Object>> conditionSkips = List.of();
+    private static volatile List<Map<String, Object>> changedTargets = List.of();
+    private static volatile List<Map<String, Object>> fingerprintChecks = List.of();
+    private static volatile Predicate<String> appliedMixins = name -> false;
 
     private static final Queue<Map<String, Object>> PROBLEMS = new ConcurrentLinkedQueue<>();
     private static final AtomicInteger PROBLEM_COUNT = new AtomicInteger();
@@ -53,23 +60,41 @@ public final class DiagnosticsStore {
     private static final Set<Throwable> RETHROWN_CAUSES =
             Collections.newSetFromMap(Collections.synchronizedMap(new WeakHashMap<>()));
 
+    private static final Queue<Map<String, String>> PREPARE_FAILURES = new ConcurrentLinkedQueue<>();
+    private static final Queue<Map<String, String>> SKIPPED_MIXINS = new ConcurrentLinkedQueue<>();
+    private static volatile boolean collectingPrepareFailures;
+
     private static final LongAdder CLASSES_TRANSFORMED = new LongAdder();
     private static final LongAdder TRANSFORM_NANOS = new LongAdder();
+    private static final Map<String, LongAdder> APPLY_NANOS = new ConcurrentHashMap<>();
 
-    private static final Map<String, Map<String, List<MethodOrigin>>> METHODS = new ConcurrentHashMap<>();
+    private static final Map<String, Map<String, List<MethodRecord>>> METHODS = new ConcurrentHashMap<>();
     private static final Map<MethodOrigin, MethodOrigin> ORIGINS = new ConcurrentHashMap<>();
 
     private DiagnosticsStore() {}
 
-    public record MethodOrigin(String mixin, String config, String source, String kind) {
+    public record MethodOrigin(String mixin, String config, String source, String kind) {}
 
-        Map<String, String> toMap() {
-            Map<String, String> map = new LinkedHashMap<>();
-            map.put("mixin", mixin);
-            map.put("config", config);
-            map.put("source", source);
-            map.put("kind", kind);
-            return Collections.unmodifiableMap(map);
+    public record MethodRecord(String descriptor, int firstLine, int lastLine, List<MethodOrigin> origins) {
+
+        public MethodRecord {
+            origins = List.copyOf(origins);
+        }
+
+        void addTo(List<Map<String, String>> entries) {
+            String first = firstLine > 0 ? Integer.toString(firstLine) : null;
+            String last = lastLine > 0 ? Integer.toString(lastLine) : null;
+            for (MethodOrigin origin : origins) {
+                Map<String, String> map = new LinkedHashMap<>();
+                map.put("mixin", origin.mixin());
+                map.put("config", origin.config());
+                map.put("source", origin.source());
+                map.put("kind", origin.kind());
+                map.put("descriptor", descriptor);
+                map.put("firstLine", first);
+                map.put("lastLine", last);
+                entries.add(Collections.unmodifiableMap(map));
+            }
         }
     }
 
@@ -102,6 +127,33 @@ public final class DiagnosticsStore {
         }
     }
 
+    public static void setHytaleVersion(String version) {
+        hytaleVersion = version;
+    }
+
+    static String hytaleVersion() {
+        return hytaleVersion;
+    }
+
+    public static void setAppliedMixins(Predicate<String> applied) {
+        appliedMixins = applied;
+    }
+
+    static boolean mixinApplied(String mixin) {
+        return appliedMixins.test(mixin);
+    }
+
+    public static void setConditionSkips(List<Map<String, Object>> list) {
+        conditionSkips = freezeList(list);
+    }
+
+    @SuppressWarnings("unchecked")
+    public static void setChangedTargets(
+            List<? extends Map<String, ?>> changes, List<? extends Map<String, ?>> checks) {
+        changedTargets = freezeList((List<Map<String, Object>>) changes);
+        fingerprintChecks = freezeList((List<Map<String, Object>>) checks);
+    }
+
     public static void setSources(List<Map<String, Object>> list) {
         sources = freezeList(list);
     }
@@ -117,6 +169,16 @@ public final class DiagnosticsStore {
     public static void addTransformation(long nanos) {
         CLASSES_TRANSFORMED.increment();
         TRANSFORM_NANOS.add(nanos);
+    }
+
+    public static void addApplyNanos(Collection<String> sources, long nanos) {
+        if (sources.isEmpty()) {
+            return;
+        }
+        long share = nanos / sources.size();
+        for (String source : sources) {
+            APPLY_NANOS.computeIfAbsent(source, key -> new LongAdder()).add(share);
+        }
     }
 
     public static void addProblem(String level, String message, String source, Throwable cause) {
@@ -148,6 +210,41 @@ public final class DiagnosticsStore {
         addProblem(level, message, source, cause);
     }
 
+    public static void collectPrepareFailures() {
+        collectingPrepareFailures = true;
+    }
+
+    public static boolean addPrepareFailure(String jar, String config, String mixin, Throwable cause) {
+        if (!collectingPrepareFailures) {
+            return false;
+        }
+        Map<String, String> failure = new LinkedHashMap<>();
+        failure.put("jar", jar);
+        failure.put("config", config);
+        failure.put("mixin", mixin);
+        failure.put("message", withoutPaths(cause.getMessage()));
+        PREPARE_FAILURES.add(Collections.unmodifiableMap(failure));
+        addProblem(ERROR, "Mixin " + mixin + " from " + config + " could not be prepared", jar, cause);
+        return true;
+    }
+
+    public static List<Map<String, String>> prepareFailures() {
+        return List.copyOf(PREPARE_FAILURES);
+    }
+
+    public static void addSkippedMixin(String jar, String config, String mixin, String target) {
+        Map<String, String> skipped = new LinkedHashMap<>();
+        skipped.put("jar", jar);
+        skipped.put("config", config);
+        skipped.put("mixin", mixin);
+        skipped.put("target", target);
+        SKIPPED_MIXINS.add(Collections.unmodifiableMap(skipped));
+    }
+
+    public static List<Map<String, String>> skippedMixins() {
+        return List.copyOf(SKIPPED_MIXINS);
+    }
+
     public static void markRethrown(Throwable cause) {
         if (cause != null) {
             RETHROWN_CAUSES.add(cause);
@@ -160,9 +257,9 @@ public final class DiagnosticsStore {
         return known == null ? origin : known;
     }
 
-    public static void recordMethods(String className, Map<String, List<MethodOrigin>> methods) {
-        Map<String, List<MethodOrigin>> copy = new LinkedHashMap<>();
-        methods.forEach((method, origins) -> copy.put(method, List.copyOf(origins)));
+    public static void recordMethods(String className, Map<String, List<MethodRecord>> methods) {
+        Map<String, List<MethodRecord>> copy = new LinkedHashMap<>();
+        methods.forEach((method, overloads) -> copy.put(method, List.copyOf(overloads)));
         METHODS.put(className, Collections.unmodifiableMap(copy));
     }
 
@@ -305,23 +402,30 @@ public final class DiagnosticsStore {
         snapshot.put("mixinVersion", mixinVersion);
         snapshot.put("mixinExtrasVersion", mixinExtrasVersion);
         snapshot.put("fabricMixinVersion", fabricMixinVersion);
+        snapshot.put("hytaleVersion", hytaleVersion);
         snapshot.put("sources", sources);
         snapshot.put("configs", configs);
+        snapshot.put("conditionSkips", conditionSkips);
+        snapshot.put("changedTargets", changedTargets);
+        snapshot.put("fingerprintChecks", fingerprintChecks);
         snapshot.put("problems", Collections.unmodifiableList(new ArrayList<>(PROBLEMS)));
         snapshot.put("problemsOmitted", PROBLEMS_OMITTED.get());
         snapshot.put("classesTransformed", CLASSES_TRANSFORMED.sum());
         snapshot.put("transformNanos", TRANSFORM_NANOS.sum());
+        Map<String, Long> applyNanos = new TreeMap<>();
+        APPLY_NANOS.forEach((source, nanos) -> applyNanos.put(source, nanos.sum()));
+        snapshot.put("applyNanosBySource", Collections.unmodifiableMap(applyNanos));
         snapshot.put("mixinTargetClasses", (long) METHODS.size());
         long millis = bootstrapMillis;
         snapshot.put("bootstrapMillis", millis < 0 ? null : millis);
         return Collections.unmodifiableMap(snapshot);
     }
 
-    static Map<String, List<MethodOrigin>> methodsOf(String className) {
+    static Map<String, List<MethodRecord>> methodsOf(String className) {
         return METHODS.get(className);
     }
 
-    static Map<String, Map<String, List<MethodOrigin>>> methods() {
+    static Map<String, Map<String, List<MethodRecord>>> methods() {
         return new LinkedHashMap<>(METHODS);
     }
 

@@ -194,21 +194,20 @@ public abstract class MixinPluginManager {
         if (SourceMetaStore.get(LoaderUtil.normalizeExistingPath(source)).mixinsSkipped()) {
             String message = "Mixins of " + identifier
                     + " were not applied at startup because it was disabled. Restart the server to apply them.";
-            HyinitLogger.get().warn(message);
-            DiagnosticsStore.addProblem(DiagnosticsStore.WARN, message, DiagnosticsStore.fileName(source), null);
+            HyinitLogger.warnProblem(message, DiagnosticsStore.fileName(source), null);
         }
-        this.lock.readLock().lock();
+        URL url = UrlUtil.asUrl(source);
+        this.lock.writeLock().lock();
         try {
             PluginClassLoader cached = this.classLoaders.get(source);
             if (cached != null && !hyinit$isLoaderInUse(cached, source) && this.classLoaders.remove(source, cached)) {
                 cached.close();
             }
+            return this.classLoaders.computeIfAbsent(
+                    source, path -> new PluginClassLoader(self, identifier, true, true, url));
         } finally {
-            this.lock.readLock().unlock();
+            this.lock.writeLock().unlock();
         }
-        URL url = UrlUtil.asUrl(source);
-        return this.classLoaders.computeIfAbsent(
-                source, path -> new PluginClassLoader(self, identifier, true, true, url));
     }
 
     @WrapOperation(

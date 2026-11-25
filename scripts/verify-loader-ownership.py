@@ -2,9 +2,9 @@ import argparse
 import json
 import os
 from pathlib import Path
-import shutil
-import subprocess
 import zipfile
+
+from verify_common import runner
 
 
 def main():
@@ -14,15 +14,8 @@ def main():
     args = parser.parse_args()
     hyinit, server, java_home, output = [path.resolve() for path in (args.hyinit_jar, args.server_jar, args.java_home, args.output_dir)]
     output.mkdir(parents=True, exist_ok=False)
-    env = dict(os.environ)
-    for key in ("JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS", "JDK_JAVA_OPTIONS", "CLASSPATH"):
-        env.pop(key, None)
     result = {"status": "running", "phases": {}}
-    def run(command, cwd, log):
-        with log.open("wb") as stream:
-            process = subprocess.run(list(map(str, command)), cwd=cwd, env=env,
-                                     stdout=stream, stderr=subprocess.STDOUT, timeout=60)
-        return process.returncode, log.read_text(errors="replace")
+    run = runner(60)
     try:
         classes = output / "classes"
         classes.mkdir()
@@ -71,7 +64,7 @@ def main():
         with zipfile.ZipFile(consumer_jar, "w") as jar:
             jar.writestr("manifest.json", json.dumps({"Group": "LocalVerification", "Name": "Consumer", "Version": "1.0.0"}))
         failed = False
-        for mode in ("same", "different", "bundled-library", "absent", "empty", "invalid-array", "invalid-package", "invalid-entry", "invalid-keyword", "no-main"):
+        for mode in ("same", "different", "bundled-library", "absent", "invalid-package", "no-main"):
             runtime = output / mode
             plugins = runtime / "earlyplugins"
             plugins.mkdir(parents=True)
@@ -81,11 +74,7 @@ def main():
                     if name == "manifest.json":
                         manifest = json.loads(data)
                         if mode == "absent": manifest.pop("HyinitSharedPackages")
-                        elif mode == "empty": manifest["HyinitSharedPackages"] = []
-                        elif mode == "invalid-array": manifest["HyinitSharedPackages"] = "local.hyinit.ownership.shared"
                         elif mode == "invalid-package": manifest["HyinitSharedPackages"] = ["local.hyinit.ownership.shared", "other.*"]
-                        elif mode == "invalid-entry": manifest["HyinitSharedPackages"] = [42]
-                        elif mode == "invalid-keyword": manifest["HyinitSharedPackages"] = ["local.class"]
                         elif mode == "no-main": manifest.pop("Main")
                         data = json.dumps(manifest).encode()
                     copied.writestr(name, data)

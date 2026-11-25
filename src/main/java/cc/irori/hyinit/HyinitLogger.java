@@ -1,5 +1,6 @@
 package cc.irori.hyinit;
 
+import cc.irori.hyinit.shared.DiagnosticsStore;
 import com.hypixel.hytale.logger.HytaleLogger;
 import java.util.ArrayList;
 import java.util.List;
@@ -31,6 +32,15 @@ public final class HyinitLogger implements ILogger {
     private static List<LogRecord> startupLines = new ArrayList<>();
 
     private HytaleLogger hytaleLogger;
+
+    public static void warnProblem(String message, String source, Throwable cause) {
+        if (cause == null) {
+            INSTANCE.warn(message);
+        } else {
+            INSTANCE.warn(message, cause);
+        }
+        DiagnosticsStore.addProblem(DiagnosticsStore.WARN, message, source, cause);
+    }
 
     @Override
     public String getId() {

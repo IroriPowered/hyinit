@@ -1,17 +1,13 @@
 # Installing Hyinit
 
-Hyinit needs Java 25. It has no configuration file. Every way below is supported and gives mods the same Mixin setup.
+Hyinit has no configuration file. Every way below gives mods the same Mixin setup.
 
 ## Install as an early plugin
 
-Put the Hyinit JAR in an early-plugin directory beside the Mixin JARs and start the server as usual.
-
-In single-player that directory is `UserData/EarlyPlugins` in the Hytale data folder.
-
-The differences from starting Hyinit directly:
+Put the Hyinit JAR in an early-plugin directory beside the Mixin JARs and start the server as usual. In single-player that directory is `UserData/EarlyPlugins` in the Hytale data folder.
 
 - A dedicated server needs `--accept-early-plugins` or a confirmation on the console. Single-player needs neither.
-- Hytale constructs every native class transformer before Hyinit starts, including those in JARs Hyinit skips. Hyinit constructs the ones it keeps again. Remove JARs that Hyinit skips.
+- Hytale constructs the native class transformers of every JAR, including JARs Hyinit skips. Remove JARs that Hyinit skips.
 - `--server-jar` is ignored.
 
 ## Start Hyinit instead of the server
@@ -38,35 +34,38 @@ Put Mixin JARs and combined plugins in `earlyplugins`. [JAR discovery](#jar-disc
 
 ### Duplicate plugins
 
-Byte-identical copies of a JAR with the same `Group:Name` ID are loaded once, with a warning. JARs without an ID are not compared. Different JARs with the same `Group:Name` ID stop startup, even if their versions match. This also applies to disabled plugins.
+Byte-identical copies of a JAR with the same `Group:Name` ID are loaded once, with a warning. JARs without an ID are not compared. Different JARs with the same ID stop startup, even if their versions match or they are disabled.
 
 A JAR in `earlyplugins` with a `Main` is also loaded as a native plugin. An identical copy in `mods` is skipped with a warning. A different JAR with the same ID in `mods` stops startup.
 
 ### Disable a plugin
 
-`Mods` entries in Hytale's `config.json` are keyed by `Group:Name`. Setting a plugin's `Enabled` to `false` skips its Mixins, not its classes or native transformers. A plugin whose manifest sets `DisabledByDefault` is skipped the same way unless its `Enabled` is `true`. Remove its JAR from all scanned directories to disable it completely.
+`Mods` entries in Hytale's `config.json` are keyed by `Group:Name`. Setting a plugin's `Enabled` to `false` skips its Mixins, not its classes or native transformers. A plugin whose manifest sets `DisabledByDefault` is skipped the same way unless its `Enabled` is `true`. To disable a plugin completely, remove its JAR from all scanned directories.
 
-Enabling a skipped plugin while the server runs applies its Mixins only after a restart. Unloading a plugin does not remove Mixins that were already applied.
+Enabling a skipped plugin while the server runs applies its Mixins only after a restart. Unloading a plugin does not remove applied Mixins.
 
 ### Check Mixins after an update
 
-A Mixin can fail long after startup, when its target class first loads. Run Hyinit once with `--check-mixins` after updating Hytale, Hyinit or a plugin. Use the server's working directory and keep any `--server-jar` and `--early-plugins` options:
+A Mixin can fail long after startup, when its target class first loads. Run Hyinit once with `--check-mixins` after updating Hytale, Hyinit or a plugin. Use the server's working directory, the path to your Hyinit JAR and any `--server-jar` and `--early-plugins` options:
 
 ```shell
 java -jar earlyplugins/Hyinit-X.X.X.jar --check-mixins
 ```
 
-Use the path to your Hyinit JAR if it is not in `earlyplugins`.
+It loads every target class and exits with status 1 if a class fails to load, an injector matches nothing, even one without `require`, or a Mixin of a config without `"required": true` could not be applied. Mixins and handlers that a [condition](/mod/hyinit/conditions-and-manifest-reference#conditions) skips are not checked.
 
-It loads every target class and exits with status 1 if a class fails to load or an injector matches nothing, even one without `require`. Add `-Dmixin.debug.countInjections=false` before `-jar` to skip the injector check.
+It also warns when Mixins from two JARs conflict on one method and logs one warning per JAR whose [fingerprinted](/mod/hyinit/conditions-and-manifest-reference#changed-hytale-methods) methods or fields changed. `--report` lists each one. A normal start reads fingerprints only for JARs that ask for it in their manifest.
 
-When a required Mixin config cannot be prepared, for example because a target class is missing, the check stops at that error. Its last line names the JAR to update or remove.
+When a required Mixin config cannot be prepared, for example because a target class is missing, the check logs one error per config that names the JAR to update or remove. It goes on with the other configs, so one run lists every such JAR. `--report` lists them under `check.notPrepared`. A normal start stops at the first one.
+
+A Mixin of a config without `"required": true` that cannot be prepared or applied is dropped by Mixin, which logs a warning with the reason. The check counts each such Mixin as a failure, ends with `<count> Mixin(s) of optional configs could not be applied and were skipped: <mixin>, <mixin>. The warnings above show why.` and lists them under `check.notApplied`. A normal start goes on without them.
+
+Before its last line the check logs one line per early-plugin JAR it found, such as `mymod.jar: 84 of 84 targets loaded, 93 Mixins skipped by conditions, 61 Mixins off by its settings, fingerprints compared`, `lenient.jar: 12 of 12 targets loaded, 2 Mixins not applied, see the warnings above`, `other.jar: no Mixins` or `broken.jar: not prepared, see its error`. Disabled plugins and skipped JARs are listed too. `--report` has the same data under `check.jars`, and the class lists stay in the other `check` keys. A normal start does not log these lines.
 
 The check does not:
 
 - Run static initialisers or native transformers.
 - Detect injectors that declare `expect = 0`.
-- Detect a failing Mixin in a config without `"required": true`. Mixin only logs those.
 
 ## Launcher reference
 
@@ -80,11 +79,15 @@ The check does not:
 | `-Dhyinit.debugClassLoader` | Off | Log every class the Hyinit class loader cannot find and every Mixin synthetic class it generates or fails to generate. Any value turns it on. |
 | `-Dmixin.debug.countInjections=false` | `true` with `--check-mixins` | Makes `--check-mixins` skip the injector check. |
 | `--check-mixins` | Off | [Check Mixins](#check-mixins-after-an-update) and exit without starting the server. |
+| `--strict` | Off | Make `--check-mixins` also exit with status 1 on Mixin conflict and fingerprint warnings. |
+| `--report=<file>` | Off | Write the `--check-mixins` result, its warnings, the per-JAR summary, every changed method and field and the diagnostics as JSON. |
+| `--write-fingerprints=<jar>` | Off | Write the [fingerprints](/mod/hyinit/conditions-and-manifest-reference#changed-hytale-methods) of the Hytale methods the JAR's Mixins use into the JAR and exit. |
+| `--fingerprint-server=[<version>=]<server jar>` | `--server-jar` | Server JAR to record a `--write-fingerprints` baseline for. Repeat it for one baseline per Hytale version. The version defaults to the JAR's `Implementation-Version`. |
 | `--version` | Off | Print the Hyinit version and exit. Only with `-jar`. |
 
-`-D` options go before `-jar`. The others go after the Hyinit JAR path.
+`-D` options go before `-jar`. The others go after the Hyinit JAR path. `--strict` and `--report` are ignored with a warning without `--check-mixins`.
 
-`--server-jar` and `--early-plugins` also accept a space before their value. `--serverJar` is an alias for `--server-jar`.
+`--server-jar`, `--early-plugins`, `--report`, `--write-fingerprints` and `--fingerprint-server` also accept a space before their value. `--serverJar` is an alias for `--server-jar`.
 
 Other arguments pass through to Hytale.
 

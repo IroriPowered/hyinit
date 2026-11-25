@@ -16,17 +16,23 @@
  */
 package cc.irori.hyinit;
 
+import cc.irori.hyinit.mixin.CrashBlame;
 import cc.irori.hyinit.mixin.HyinitClassLoader;
 import cc.irori.hyinit.mixin.HyinitMixinBootstrap;
 import cc.irori.hyinit.mixin.HyinitMixinService;
 import cc.irori.hyinit.mixin.MixinCompatibility;
+import cc.irori.hyinit.mixin.MixinConditions;
+import cc.irori.hyinit.mixin.MixinConflictCheck;
 import cc.irori.hyinit.mixin.MixinErrorRecorder;
 import cc.irori.hyinit.mixin.MixinOriginExtension;
 import cc.irori.hyinit.mixin.OptionalPatchCheck;
 import cc.irori.hyinit.shared.DiagnosticsStore;
+import cc.irori.hyinit.shared.HyinitDiagnostics;
 import cc.irori.hyinit.shared.SourceMetaStore;
 import cc.irori.hyinit.shared.SourceMetadata;
+import cc.irori.hyinit.util.JsonUtil;
 import cc.irori.hyinit.util.SneakyThrow;
+import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.llamalad7.mixinextras.MixinExtrasBootstrap;
 import com.llamalad7.mixinextras.service.MixinExtrasVersion;
@@ -41,6 +47,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
@@ -53,8 +60,10 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.concurrent.ForkJoinPool;
+import java.util.jar.JarFile;
 import java.util.logging.LogManager;
 import java.util.stream.Stream;
 import org.spongepowered.asm.launch.MixinBootstrap;
@@ -81,6 +90,36 @@ public final class Main {
             System.out.println("Hyinit " + version());
             return;
         }
+        String fingerprints = LauncherOptions.value(args, LauncherOptions.WRITE_FINGERPRINTS);
+        if (fingerprints != null || LauncherOptions.flag(args, LauncherOptions.WRITE_FINGERPRINTS)) {
+            if (fingerprints == null || fingerprints.isEmpty()) {
+                LOGGER.error("--write-fingerprints needs the path of the mod JAR");
+                System.exit(1);
+            }
+            Path modJar = Path.of(fingerprints);
+            try {
+                List<Fingerprints.Server> servers = new ArrayList<>();
+                for (String server : LauncherOptions.values(args, LauncherOptions.FINGERPRINT_SERVER)) {
+                    servers.add(Fingerprints.server(server));
+                }
+                if (servers.isEmpty()) {
+                    servers.add(
+                            Fingerprints.server(ServerJarLocator.locate(args).toString()));
+                }
+                int count = Fingerprints.write(modJar, servers);
+                System.out.println("Wrote " + count + " target fingerprint(s) for Hytale "
+                        + String.join(
+                                ", ",
+                                servers.stream()
+                                        .map(Fingerprints.Server::version)
+                                        .toList()) + " to "
+                        + Fingerprints.ENTRY + " in " + modJar.getFileName());
+            } catch (ConfigCollector.StartupValidationException e) {
+                LOGGER.error(e.getMessage());
+                System.exit(1);
+            }
+            return;
+        }
         try {
             launch(args, ServerJarLocator.locate(args), false);
         } catch (ConfigCollector.StartupValidationException e) {
@@ -98,6 +137,150 @@ public final class Main {
             LOGGER.error(e.getMessage());
             System.exit(1);
         }
+    }
+
+    private record Findings(List<String> warnings, List<Map<String, String>> details) {}
+
+    private static Map<Path, List<MixinConditions.ChangedTarget>> changedTargets(
+            ConfigCollector.Result result,
+            Path serverJar,
+            String hytaleVersion,
+            MixinConditions.Guard guard,
+            List<Path> earlyJars,
+            String report,
+            boolean checking,
+            Findings findings) {
+        Map<Path, List<MixinConditions.ChangedTarget>> skipped = new LinkedHashMap<>();
+        List<Path> jars = new ArrayList<>();
+        for (Path jar : earlyJars) {
+            if (checking || result.changedTargets().containsKey(jar)) {
+                jars.add(jar);
+            }
+        }
+        List<Map<String, String>> snapshot = new ArrayList<>();
+        Map<Path, Map<String, String>> checks = new LinkedHashMap<>();
+        if (jars.isEmpty()) {
+            DiagnosticsStore.setChangedTargets(snapshot, List.of());
+            return skipped;
+        }
+        try (CallCheck.Server server = new CallCheck.Server(serverJar)) {
+            for (Path jar : jars) {
+                String mode = result.changedTargets().get(jar);
+                boolean announce = checking || "warn".equals(mode);
+                boolean quiet = !checking && "compare".equals(mode);
+                String source = DiagnosticsStore.fileName(jar);
+                List<Fingerprints.Change> changes = new ArrayList<>();
+                List<String> problems = new ArrayList<>();
+                String status = Fingerprints.FAILED;
+                String baseline = null;
+                boolean usedMembers = true;
+                try {
+                    Fingerprints.Check check = Fingerprints.check(serverJar, hytaleVersion, guard, jar);
+                    status = check.status();
+                    String problem = check.problem();
+                    if (problem == null && mode != null && status.equals(Fingerprints.NOT_SHIPPED)) {
+                        problem = Fingerprints.notShippedMessage(jar);
+                    }
+                    if (problem != null) {
+                        HyinitLogger.warnProblem(problem, source, null);
+                        problems.add(problem);
+                    }
+                    baseline = check.baseline();
+                    changes.addAll(check.changes());
+                } catch (IOException | RuntimeException e) {
+                    String message = "Cannot compare the fingerprints in " + jar.getFileName() + " with "
+                            + serverJar.getFileName();
+                    HyinitLogger.warnProblem(message, source, e);
+                    problems.add(message);
+                }
+                try {
+                    Map<String, Set<String>> plain = new LinkedHashMap<>();
+                    for (CallCheck.Missing missing : CallCheck.scan(server, jar, guard)) {
+                        if (missing.mixin()) {
+                            changes.add(new Fingerprints.Change(
+                                    jar.getFileName().toString(),
+                                    missing.user(),
+                                    missing.owner(),
+                                    missing.member(),
+                                    missing.kind(),
+                                    "missing",
+                                    null));
+                        } else {
+                            plain.computeIfAbsent(missing.user(), key -> new TreeSet<>())
+                                    .add(missing.describe());
+                        }
+                    }
+                    if (!quiet) {
+                        plain.forEach((user, members) -> {
+                            String message = user + " in " + jar.getFileName() + " uses "
+                                    + String.join(", ", members) + ", which Hytale " + hytaleVersion
+                                    + " does not have. It fails when that code runs.";
+                            HyinitLogger.warnProblem(message, source, null);
+                            findings.warnings().add(message);
+                        });
+                    }
+                } catch (IOException | RuntimeException e) {
+                    String message = "Cannot check the members that " + jar.getFileName() + " uses against "
+                            + serverJar.getFileName();
+                    HyinitLogger.warnProblem(message, source, e);
+                    problems.add(message);
+                    usedMembers = false;
+                }
+                findings.warnings().addAll(problems);
+                checks.put(
+                        jar,
+                        fingerprintCheck(
+                                jar,
+                                result.pluginIds().get(jar),
+                                status,
+                                baseline,
+                                usedMembers,
+                                problems.isEmpty() ? null : String.join(" ", problems)));
+                if (changes.isEmpty()) {
+                    continue;
+                }
+                changes.forEach(change -> snapshot.add(change.toMap()));
+                changes.forEach(change -> findings.details().add(change.toMap()));
+                if ("skip".equals(mode)) {
+                    skipped.put(
+                            jar,
+                            changes.stream()
+                                    .map(change -> new MixinConditions.ChangedTarget(
+                                            change.mixin(), Fingerprints.reason(change, hytaleVersion)))
+                                    .toList());
+                }
+                if (announce) {
+                    for (String message :
+                            Fingerprints.messages(jar, changes, baseline, hytaleVersion, checking ? report : null)) {
+                        HyinitLogger.warnProblem(message, source, null);
+                        findings.warnings().add(message);
+                    }
+                }
+            }
+        } catch (IOException e) {
+            String message = "Cannot read " + serverJar.getFileName() + " to compare the fingerprints";
+            HyinitLogger.warnProblem(message, DiagnosticsStore.fileName(serverJar), e);
+            findings.warnings().add(message);
+            for (Path jar : jars) {
+                checks.putIfAbsent(
+                        jar,
+                        fingerprintCheck(jar, result.pluginIds().get(jar), Fingerprints.FAILED, null, false, message));
+            }
+        }
+        DiagnosticsStore.setChangedTargets(snapshot, List.copyOf(checks.values()));
+        return skipped;
+    }
+
+    private static Map<String, String> fingerprintCheck(
+            Path jar, String pluginId, String status, String baseline, boolean usedMembers, String detail) {
+        Map<String, String> check = new LinkedHashMap<>();
+        check.put("jar", DiagnosticsStore.fileName(jar));
+        check.put("pluginId", pluginId);
+        check.put("status", status);
+        check.put("baseline", baseline);
+        check.put("usedMembers", usedMembers ? "checked" : "failed");
+        check.put("detail", detail);
+        return check;
     }
 
     private static String version() throws IOException {
@@ -125,9 +308,25 @@ public final class Main {
     private static void launch(String[] args, Path serverJar, boolean fromEarlyPlugin) throws Exception {
         long launchStart = System.nanoTime();
         recordLaunch(fromEarlyPlugin);
+        boolean checking = LauncherOptions.flag(args, LauncherOptions.CHECK_MIXINS);
+        if (!checking && LauncherOptions.flag(args, LauncherOptions.STRICT)) {
+            LOGGER.warn("--strict only works with --check-mixins");
+        }
+        if (LauncherOptions.flag(args, LauncherOptions.REPORT) || LauncherOptions.flag(args, "--report=")) {
+            String report = LauncherOptions.value(args, LauncherOptions.REPORT);
+            if (report == null || report.isEmpty() || report.startsWith("--")) {
+                LOGGER.error("--report needs the path of the report file");
+                System.exit(1);
+            }
+        }
+        if (!checking && LauncherOptions.value(args, LauncherOptions.REPORT) != null) {
+            LOGGER.warn("--report only works with --check-mixins");
+        }
         Path cwd = Paths.get("").toAbsolutePath().normalize();
 
         System.out.println("Using server jar: " + serverJar);
+        String hytaleVersion = hytaleVersion(serverJar);
+        DiagnosticsStore.setHytaleVersion(hytaleVersion);
 
         Path selfJar = Paths.get(Main.class
                         .getProtectionDomain()
@@ -146,12 +345,13 @@ public final class Main {
         if (selfDir != null) {
             addEarlyPluginDirectory(earlyPluginDirsSet, selfDir.resolve("earlyplugins"));
         }
-        for (Path p : parseEarlyPluginPaths(args)) {
-            addEarlyPluginDirectory(earlyPluginDirsSet, p);
+        for (String dir : LauncherOptions.list(args, LauncherOptions.EARLY_PLUGINS)) {
+            addEarlyPluginDirectory(earlyPluginDirsSet, Paths.get(dir));
         }
         List<Path> earlyPluginDirs = new ArrayList<>(earlyPluginDirsSet);
 
-        ConfigCollector.Result result = ConfigCollector.collectMixinConfigs(cwd, earlyPluginDirs, selfJar);
+        ConfigCollector.ServerConfig serverConfig = ConfigCollector.serverConfig(cwd);
+        ConfigCollector.Result result = ConfigCollector.collectMixinConfigs(serverConfig, earlyPluginDirs, selfJar);
         result.warnings().forEach(warning -> LOGGER.warn(warning.message()));
         result.failures().forEach(failure -> LOGGER.warn(failure.message(), failure.cause()));
         SourceMetaStore.setSkippedJars(result.excludedJars());
@@ -219,8 +419,11 @@ public final class Main {
 
         System.setProperty("mixin.bootstrapService", HyinitMixinBootstrap.class.getName());
         System.setProperty("mixin.service", HyinitMixinService.class.getName());
-        if (List.of(args).contains("--check-mixins") && System.getProperty("mixin.debug.countInjections") == null) {
+        if (checking && System.getProperty("mixin.debug.countInjections") == null) {
             System.setProperty("mixin.debug.countInjections", "true");
+        }
+        if (checking) {
+            DiagnosticsStore.collectPrepareFailures();
         }
 
         MixinBootstrap.init();
@@ -228,6 +431,24 @@ public final class Main {
 
         classLoader.initializeTransformer();
 
+        Plugins plugins = plugins(result, cwd, serverConfig, serverJar, hytaleVersion, args);
+        MixinConditions.Context context = new MixinConditions.Context(
+                serverJar.getFileName().toString(),
+                hytaleVersion,
+                plugins.versions(),
+                result.origins(),
+                plugins.refused(),
+                Map.of());
+        Findings findings = new Findings(new ArrayList<>(), new ArrayList<>());
+        Map<Path, List<MixinConditions.ChangedTarget>> changed = changedTargets(
+                result,
+                serverJar,
+                hytaleVersion,
+                MixinConditions.guard(context),
+                earlyJars,
+                LauncherOptions.value(args, LauncherOptions.REPORT),
+                checking,
+                findings);
         for (String config : configs) {
             Path origin = result.origins().get(config);
             try {
@@ -247,14 +468,25 @@ public final class Main {
         List<Config> registered = List.copyOf(Mixins.getConfigs());
         HyinitClassLoader.setMixinConfigs(registered);
         installDiagnostics(classLoader, registered);
+        MixinConditions.prepare(
+                classLoader,
+                registered,
+                new MixinConditions.Context(
+                        context.serverJar(),
+                        context.hytaleVersion(),
+                        context.plugins(),
+                        context.configJars(),
+                        context.refusedJars(),
+                        changed));
 
         finishMixinBootstrapping();
 
-        if (List.of(args).contains("--check-mixins")) {
-            System.exit(checkMixins(classLoader, registered) ? 0 : 1);
+        if (checking) {
+            System.exit(checkMixins(classLoader, registered, findings, result, earlyJars, args) ? 0 : 1);
         }
 
         LOGGER.info("Starting HytaleServer");
+        CrashBlame.install();
 
         Throwable[] failure = new Throwable[1];
         Thread thread = new Thread(() -> {
@@ -281,6 +513,87 @@ public final class Main {
         }
     }
 
+    static String hytaleVersion(Path serverJar) {
+        try (JarFile jar = new JarFile(serverJar.toFile(), false)) {
+            var manifest = jar.getManifest();
+            return manifest == null ? null : manifest.getMainAttributes().getValue("Implementation-Version");
+        } catch (IOException e) {
+            String message = "Cannot read the manifest of " + serverJar + " to find the Hytale version";
+            HyinitLogger.warnProblem(message, DiagnosticsStore.fileName(serverJar), e);
+            return null;
+        }
+    }
+
+    private record Plugins(Map<String, String> versions, Map<Path, String> refused) {}
+
+    private static Plugins plugins(
+            ConfigCollector.Result result,
+            Path cwd,
+            ConfigCollector.ServerConfig serverConfig,
+            Path serverJar,
+            String hytaleVersion,
+            String[] args)
+            throws IOException {
+        Set<String> ids = new HashSet<>();
+        Map<String, String> visible = new HashMap<>();
+        Map<String, String> earlyOnly = new HashMap<>();
+        for (Map.Entry<Path, JsonObject> entry : result.manifests().entrySet()) {
+            Path jar = entry.getKey();
+            String id = result.pluginIds().get(jar);
+            if (id != null) {
+                Map<String, String> provided = new LinkedHashMap<>();
+                provided.put(id, result.versions().get(jar));
+                ConfigCollector.subPlugins(entry.getValue()).forEach(provided::putIfAbsent);
+                provided.forEach((providedId, version) -> {
+                    ids.add(providedId);
+                    (result.jarsWithMainClass().contains(jar) ? visible : earlyOnly).put(providedId, version);
+                });
+            }
+        }
+        Requirements.addLaunchers(earlyOnly, version());
+        List<ConfigCollector.Problem> warnings = new ArrayList<>();
+        ConfigCollector.enabledModPlugins(cwd, serverConfig, args, warnings)
+                .values()
+                .forEach(manifest -> {
+                    String id = ConfigCollector.pluginId(manifest);
+                    String version = ConfigCollector.stringField(manifest, "Version");
+                    ids.add(id);
+                    visible.putIfAbsent(id, version.isEmpty() ? null : version);
+                    ConfigCollector.subPlugins(manifest).forEach((subId, subVersion) -> {
+                        ids.add(subId);
+                        visible.putIfAbsent(subId, subVersion);
+                    });
+                });
+        try {
+            Map<String, String> core = ConfigCollector.enabledCorePlugins(
+                    serverConfig, serverJar, hytaleVersion == null ? "0.0.0-dev" : hytaleVersion, warnings);
+            ids.addAll(core.keySet());
+            core.forEach(visible::putIfAbsent);
+        } catch (IOException e) {
+            String message = "Cannot list the core plugins of " + serverJar
+                    + ". @IfPlugin, @UnlessPlugin and Dependencies only see early plugins";
+            HyinitLogger.warnProblem(message, DiagnosticsStore.fileName(serverJar), e);
+        }
+        Map<Path, Requirements.Refusal> refused = Requirements.refused(
+                result.manifests(),
+                result.pluginIds(),
+                result.jarsWithMainClass(),
+                visible,
+                earlyOnly,
+                hytaleVersion,
+                warnings);
+        for (ConfigCollector.Problem warning : warnings) {
+            HyinitLogger.warnProblem(warning.message(), DiagnosticsStore.fileName(warning.jar()), warning.cause());
+        }
+        Map<Path, String> skips = new LinkedHashMap<>();
+        refused.forEach((jar, refusal) -> {
+            HyinitLogger.warnProblem(refusal.message(), DiagnosticsStore.fileName(jar), null);
+            skips.put(jar, refusal.condition());
+        });
+        Requirements.removeRefused(ids, refused.keySet(), result.pluginIds(), result.manifests(), visible, earlyOnly);
+        return new Plugins(Requirements.conditionVersions(ids, visible, earlyOnly), Map.copyOf(skips));
+    }
+
     private static String invalidMixinMessage(Throwable failure) {
         for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
             if (cause instanceof InvalidMixinException invalid) {
@@ -293,39 +606,249 @@ public final class Main {
         return null;
     }
 
-    private static boolean checkMixins(HyinitClassLoader classLoader, List<Config> configs) {
+    private static boolean checkMixins(
+            HyinitClassLoader classLoader,
+            List<Config> configs,
+            Findings findings,
+            ConfigCollector.Result result,
+            List<Path> earlyJars,
+            String[] args)
+            throws IOException {
         Thread.currentThread().setContextClassLoader(classLoader);
+        boolean strict = LauncherOptions.flag(args, LauncherOptions.STRICT);
+        String report = LauncherOptions.value(args, LauncherOptions.REPORT);
+        Set<String> targets = new TreeSet<>();
         Set<String> failed = new TreeSet<>();
-        Throwable mainFailure = load(classLoader, HYTALE_MAIN);
+        Set<String> notFound = new TreeSet<>();
+        targets.add(HYTALE_MAIN);
+        Throwable mainFailure = load(classLoader, HYTALE_MAIN, notFound);
         if (mainFailure != null) {
             failed.add(HYTALE_MAIN);
         }
+        List<String> warnings = new ArrayList<>();
+        List<Map<String, String>> notPrepared = List.of();
+        List<Map<String, String>> notApplied = List.of();
+        String error;
+        boolean loaded = false;
         if (MixinService.getService().getReEntranceLock().getDepth() > 0) {
             String message = invalidMixinMessage(mainFailure);
-            LOGGER.error(
-                    message != null ? message : "Mixin could not prepare the Mixin configs. See the errors above.");
-            return false;
-        }
-        Set<String> targets = new TreeSet<>();
-        targets.add(HYTALE_MAIN);
-        for (Config config : configs) {
-            targets.addAll(config.getConfig().getTargets());
-        }
-        for (String target : targets) {
-            if (!target.equals(HYTALE_MAIN) && load(classLoader, target) != null) {
-                failed.add(target);
+            error = message != null ? message : "Mixin could not prepare the Mixin configs. See the errors above.";
+        } else {
+            for (Config config : configs) {
+                targets.addAll(config.getConfig().getTargets());
+            }
+            for (String target : targets) {
+                if (!target.equals(HYTALE_MAIN) && load(classLoader, target, notFound) != null) {
+                    failed.add(target);
+                }
+            }
+            loaded = true;
+            warnings.addAll(MixinConflictCheck.warnings());
+            warnings.addAll(findings.warnings());
+            notPrepared = DiagnosticsStore.prepareFailures();
+            notApplied = DiagnosticsStore.skippedMixins();
+            List<String> errors = new ArrayList<>();
+            if (!failed.isEmpty()) {
+                errors.add(failed.size() + " of " + targets.size() + " Mixin target classes failed: "
+                        + String.join(", ", failed));
+            }
+            if (!notApplied.isEmpty()) {
+                Set<String> skippedMixins = new TreeSet<>();
+                notApplied.forEach(skipped -> skippedMixins.add(skipped.get("mixin")));
+                errors.add(
+                        skippedMixins.size() + " Mixin(s) of optional configs could not be applied and were skipped: "
+                                + String.join(", ", skippedMixins) + ". The warnings above show why.");
+            }
+            Set<String> broken = new TreeSet<>();
+            for (Map<String, String> failure : notPrepared) {
+                broken.add(failure.get("jar"));
+                errors.add(failure.get("message") + ". Update or remove " + failure.get("jar") + ".");
+            }
+            if (broken.size() > 1) {
+                errors.add("The Mixin configs of " + broken.size() + " JARs could not be prepared: "
+                        + String.join(", ", broken) + ". Update or remove them.");
+            }
+            if (!errors.isEmpty()) {
+                error = errors.removeLast();
+                errors.forEach(LOGGER::error);
+            } else if (strict && !warnings.isEmpty()) {
+                error = warnings.size() + " warning(s) count as failures with --strict: " + warnings.getFirst();
+            } else {
+                error = null;
             }
         }
-        if (failed.isEmpty()) {
-            LOGGER.info("All " + targets.size() + " Mixin target classes loaded.");
-            return true;
+        List<Map<String, Object>> jars =
+                jarSummaries(configs, result, earlyJars, loaded, failed, notFound, notPrepared, notApplied);
+        if (report != null) {
+            Map<String, Object> check = new LinkedHashMap<>();
+            check.put("targets", targets.size());
+            check.put("loaded", targets.size() - failed.size() - notFound.size());
+            check.put("failed", List.copyOf(failed));
+            check.put("notFound", List.copyOf(notFound));
+            check.put("notPrepared", notPrepared);
+            check.put("notApplied", notApplied);
+            check.put("strict", strict);
+            check.put("warnings", warnings);
+            check.put("fingerprints", findings.details());
+            check.put("jars", jars);
+            check.put("result", error == null ? "passed" : "failed");
+            writeReport(Path.of(report), check);
         }
-        LOGGER.error(
-                failed.size() + " of " + targets.size() + " Mixin target classes failed: " + String.join(", ", failed));
-        return false;
+        jars.forEach(jar -> LOGGER.info(jarSummary(jar)));
+        if (error != null) {
+            LOGGER.error(error);
+            return false;
+        }
+        LOGGER.info("All " + targets.size() + " Mixin target classes loaded.");
+        return true;
     }
 
-    private static Throwable load(ClassLoader classLoader, String name) {
+    private static List<Map<String, Object>> jarSummaries(
+            List<Config> configs,
+            ConfigCollector.Result result,
+            List<Path> earlyJars,
+            boolean loaded,
+            Set<String> failed,
+            Set<String> notFound,
+            List<Map<String, String>> notPrepared,
+            List<Map<String, String>> notApplied) {
+        Map<String, Set<String>> targetsByJar = new HashMap<>();
+        for (Config config : configs) {
+            Path origin = result.origins().get(config.getName());
+            if (origin != null) {
+                targetsByJar
+                        .computeIfAbsent(DiagnosticsStore.fileName(origin), key -> new TreeSet<>())
+                        .addAll(config.getConfig().getTargets());
+            }
+        }
+        Map<String, Object> snapshot = HyinitDiagnostics.snapshot();
+        Map<String, Map<String, Integer>> skipsByJar = new HashMap<>();
+        for (Object entry : (List<?>) snapshot.get("conditionSkips")) {
+            Map<?, ?> skip = (Map<?, ?>) entry;
+            if (skip.get("method") == null && skip.get("field") == null) {
+                skipsByJar
+                        .computeIfAbsent((String) skip.get("source"), key -> new HashMap<>())
+                        .merge((String) skip.get("kind"), 1, Integer::sum);
+            }
+        }
+        Map<String, String> fingerprintsByJar = new HashMap<>();
+        for (Object entry : (List<?>) snapshot.get("fingerprintChecks")) {
+            Map<?, ?> check = (Map<?, ?>) entry;
+            fingerprintsByJar.put((String) check.get("jar"), (String) check.get("status"));
+        }
+        Set<String> broken = new HashSet<>();
+        notPrepared.forEach(failure -> broken.add(failure.get("jar")));
+        Map<String, Set<String>> notAppliedByJar = new HashMap<>();
+        notApplied.forEach(skipped -> notAppliedByJar
+                .computeIfAbsent(skipped.get("jar"), key -> new TreeSet<>())
+                .add(skipped.get("mixin")));
+        Set<String> withConfigs = new HashSet<>();
+        result.origins().values().forEach(jar -> withConfigs.add(DiagnosticsStore.fileName(jar)));
+        Map<Path, String> seen = new TreeMap<>();
+        earlyJars.forEach(jar -> seen.put(jar, null));
+        seen.putAll(result.skippedJars());
+        List<Map<String, Object>> summaries = new ArrayList<>();
+        seen.forEach((path, skipped) -> {
+            String jar = DiagnosticsStore.fileName(path);
+            Map<String, Object> summary = new LinkedHashMap<>();
+            summary.put("jar", jar);
+            summary.put("pluginId", result.pluginIds().get(path));
+            String state;
+            if (skipped != null) {
+                state = skipped;
+            } else if (broken.contains(jar)) {
+                state = "notPrepared";
+            } else if (!withConfigs.contains(jar)) {
+                state = "noMixins";
+            } else {
+                state = loaded ? "checked" : "notChecked";
+            }
+            summary.put("state", state);
+            if (state.equals("checked") || state.equals("notChecked")) {
+                Set<String> targets = targetsByJar.getOrDefault(jar, Set.of());
+                Map<String, Integer> skips = skipsByJar.getOrDefault(jar, Map.of());
+                summary.put("targets", targets.size());
+                summary.put(
+                        "loaded",
+                        loaded
+                                ? targets.stream()
+                                        .filter(target -> !failed.contains(target) && !notFound.contains(target))
+                                        .count()
+                                : null);
+                summary.put("skippedByConditions", skips.getOrDefault("condition", 0));
+                summary.put("skippedByRequirements", skips.getOrDefault("requirement", 0));
+                summary.put("skippedByChangedTargets", skips.getOrDefault("changedTarget", 0));
+                summary.put("offBySettings", skips.getOrDefault("configPlugin", 0));
+                summary.put(
+                        "notApplied",
+                        notAppliedByJar.getOrDefault(jar, Set.of()).size());
+            }
+            summary.put("fingerprints", fingerprintsByJar.get(jar));
+            summaries.add(summary);
+        });
+        return summaries;
+    }
+
+    private static String jarSummary(Map<String, Object> summary) {
+        String state = (String) summary.get("state");
+        String text = switch (state) {
+            case "hyxin" -> "skipped, Hyinit loads Hyxin mods itself";
+            case "hyinit" -> "skipped, it is another Hyinit JAR";
+            case "copy" -> "skipped, it is an identical copy";
+            case "disabled" -> "disabled, its Mixins are not loaded";
+            case "unreadable" -> "not readable, see the warning above";
+            case "notPrepared" -> "not prepared, see its error";
+            case "noMixins" -> "no Mixins";
+            default -> {
+                List<String> parts = new ArrayList<>();
+                Object loaded = summary.get("loaded");
+                long targets = ((Number) summary.get("targets")).longValue();
+                parts.add(
+                        loaded == null
+                                ? targets + " targets not checked"
+                                : loaded + " of " + targets + " targets loaded");
+                addCount(parts, summary.get("skippedByConditions"), "skipped by conditions");
+                addCount(parts, summary.get("skippedByRequirements"), "skipped by its requirements");
+                addCount(parts, summary.get("skippedByChangedTargets"), "skipped because Hytale changed them");
+                addCount(parts, summary.get("offBySettings"), "off by its settings");
+                addCount(parts, summary.get("notApplied"), "not applied, see the warnings above");
+                yield String.join(", ", parts);
+            }
+        };
+        String fingerprints = (String) summary.get("fingerprints");
+        if (Fingerprints.COMPARED.equals(fingerprints)) {
+            text += ", fingerprints compared";
+        } else if (Fingerprints.FAILED.equals(fingerprints) && !state.equals("noMixins")) {
+            text += ", fingerprint check failed";
+        }
+        return summary.get("jar") + ": " + text;
+    }
+
+    private static void addCount(List<String> parts, Object count, String text) {
+        if (((Number) count).intValue() > 0) {
+            parts.add(count + " Mixin" + (((Number) count).intValue() == 1 ? " " : "s ") + text);
+        }
+    }
+
+    private static void writeReport(Path report, Map<String, Object> check) throws IOException {
+        Map<String, Object> json = new LinkedHashMap<>();
+        json.put("reportVersion", 1);
+        json.putAll(HyinitDiagnostics.snapshot());
+        json.put("methodMap", HyinitDiagnostics.methodMap());
+        json.put("check", check);
+        Path target = report.toAbsolutePath();
+        Path temp = target.resolveSibling(
+                target.getFileName() + "." + ProcessHandle.current().pid() + ".tmp");
+        try {
+            Files.writeString(temp, JsonUtil.toPrettyJson(json, true) + "\n");
+            Files.move(temp, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+        } finally {
+            Files.deleteIfExists(temp);
+        }
+        LOGGER.info("Wrote the check report to " + report);
+    }
+
+    private static Throwable load(ClassLoader classLoader, String name, Set<String> notFound) {
         try {
             Class.forName(name, false, classLoader);
             return null;
@@ -335,6 +858,7 @@ public final class Main {
                 return e;
             }
             LOGGER.warn("Mixin target " + name + " was not found.");
+            notFound.add(name);
             return null;
         } catch (LinkageError e) {
             LOGGER.error("Loading " + name + " failed", e);
@@ -419,8 +943,7 @@ public final class Main {
             return HexFormat.of().formatHex(digest.digest());
         } catch (IOException | NoSuchAlgorithmException e) {
             String message = "Failed to compute the SHA-256 of " + jar;
-            LOGGER.warn(message, e);
-            DiagnosticsStore.addProblem(DiagnosticsStore.WARN, message, DiagnosticsStore.fileName(jar), e);
+            HyinitLogger.warnProblem(message, DiagnosticsStore.fileName(jar), e);
             return null;
         }
     }
@@ -430,6 +953,7 @@ public final class Main {
         Extensions extensions = (Extensions) HyinitMixinService.getTransformer().getExtensions();
         extensions.add(new MixinOriginExtension(registered));
         extensions.add(new OptionalPatchCheck());
+        extensions.add(new MixinConflictCheck());
         Mixins.registerErrorHandlerClass(MixinErrorRecorder.class.getName());
         Class.forName(MixinErrorRecorder.class.getName(), false, classLoader);
     }
@@ -481,23 +1005,6 @@ public final class Main {
         }
 
         return List.of();
-    }
-
-    private static List<Path> parseEarlyPluginPaths(String[] args) {
-        List<Path> paths = new ArrayList<>();
-        for (int i = 0; i < args.length; i++) {
-            if (args[i].equals("--early-plugins") && i + 1 < args.length) {
-                for (String pathStr : args[i + 1].split(",")) {
-                    paths.add(Paths.get(pathStr.trim()));
-                }
-            } else if (args[i].startsWith("--early-plugins=")) {
-                String value = args[i].substring("--early-plugins=".length());
-                for (String pathStr : value.split(",")) {
-                    paths.add(Paths.get(pathStr.trim()));
-                }
-            }
-        }
-        return paths;
     }
 
     static void finishMixinBootstrapping() {
